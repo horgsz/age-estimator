@@ -12,6 +12,8 @@ import cv2
 import numpy as np
 import pytest
 
+from pathlib import Path
+
 from conftest import FakeDetector, encode_jpeg
 
 from server import config
@@ -301,11 +303,15 @@ def test_save_crops_writes_one_directory_per_margin(dataset, tmp_path):
 
 
 def test_report_shows_full_margin_precision(dataset, capsys):
-    """0.0135 must not be rendered as '0.01' — that hides the whole point."""
+    """A margin like 0.0135 must not be rendered as '0.01' — that hides the point.
+
+    The margin is passed explicitly rather than relying on the default, so this
+    keeps testing precision even after the default changes.
+    """
     root, _, ages = dataset
     csv_path = write_csv(root / "t.csv", [(f"imgs/{a}.jpg", a) for a in ages], ("path", "age"))
 
-    assert harness.main(["--csv", str(csv_path), "--quiet"]) == 0
+    assert harness.main(["--csv", str(csv_path), "--margins", "0.0135", "--quiet"]) == 0
     out = capsys.readouterr().out
     assert "0.0135" in out
     assert "STUB" in out, "a stub run must be loudly labelled as meaningless"
@@ -392,3 +398,49 @@ def test_cli_reports_a_missing_dataset_without_traceback(tmp_path, capsys):
 def test_cli_requires_a_data_source():
     with pytest.raises(SystemExit):
         harness.main(["--quiet"])
+
+
+# ---------------------------------------------------------------------------
+# subsampling
+# ---------------------------------------------------------------------------
+
+
+def _samples(ages: list[int]) -> list[harness.Sample]:
+    return [harness.Sample(path=Path(f"{a}.jpg"), age=float(a)) for a in ages]
+
+
+def test_subsample_returns_everything_when_limit_is_not_binding():
+    samples = _samples(list(range(10)))
+    assert harness.subsample(samples, 10) == samples
+    assert harness.subsample(samples, 99) == samples
+    assert harness.subsample(samples, 0) == samples
+
+
+def test_subsample_spreads_across_the_set_rather_than_taking_a_head():
+    """A head slice of a path-sorted split is age-skewed; an even stride is not.
+
+    ml/splits/test.csv is sorted by path and UTKFace paths start with the age,
+    so the first rows are overwhelmingly young. Sampling must preserve the age
+    distribution or a margin sweep measures child bias instead of framing.
+    """
+    samples = _samples(list(range(100)))
+    picked = harness.subsample(samples, 10)
+
+    assert len(picked) == 10
+    assert picked[0].age == 0
+    assert picked[-1].age > 80, "an even stride must reach the tail of the set"
+
+    mean = sum(s.age for s in picked) / len(picked)
+    assert abs(mean - 49.5) < 10, "subsample mean should track the full-set mean"
+
+
+def test_subsample_head_is_available_but_opt_in():
+    samples = _samples(list(range(100)))
+    picked = harness.subsample(samples, 10, head=True)
+    assert [s.age for s in picked] == [float(a) for a in range(10)]
+
+
+def test_limit_flag_defaults_to_even_sampling():
+    args = harness.build_parser().parse_args(["--dir", ".", "--limit", "5"])
+    assert args.limit == 5
+    assert args.limit_head is False

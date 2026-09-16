@@ -190,6 +190,25 @@ def load_samples_from_dir(directory: Path) -> list[Sample]:
     return samples
 
 
+def subsample(samples: list[Sample], limit: int, head: bool = False) -> list[Sample]:
+    """Take at most ``limit`` samples, spread evenly across the set.
+
+    This deliberately does *not* default to ``samples[:limit]``. Split CSVs are
+    typically sorted by path, and UTKFace paths begin with the age, so they sort
+    lexicographically as 1, 10, 100, 11, 12, ... A head slice of ml/splits/test.csv
+    therefore contains almost nothing over 40, which silently turns any margin
+    sweep into a measurement of the model's child bias rather than of framing.
+    That produced a confidently wrong "negative margins are better" result once
+    already; an even stride keeps the age distribution representative.
+    """
+    if limit <= 0 or limit >= len(samples):
+        return samples
+    if head:
+        return samples[:limit]
+    stride = len(samples) / limit
+    return [samples[int(i * stride)] for i in range(limit)]
+
+
 # ---------------------------------------------------------------------------
 # evaluation
 # ---------------------------------------------------------------------------
@@ -209,9 +228,22 @@ class MarginStats:
     margin: float
     errors: list[float] = field(default_factory=list)
     covered: int = 0  # true age fell inside the predicted [low, high]
+    # (true, predicted, low, high, confidence) per sample. Kept so error can be
+    # binned by *predicted* age, which is the only thing a UI threshold can act
+    # on — the model compresses both tails, so a threshold that looks right
+    # against true ages fires far too late against displayed ones.
+    samples: list[tuple[float, float, float, float, float]] = field(default_factory=list)
 
-    def add(self, predicted: float, true_age: float, low: float, high: float) -> None:
+    def add(
+        self,
+        predicted: float,
+        true_age: float,
+        low: float,
+        high: float,
+        confidence: float = 0.0,
+    ) -> None:
         self.errors.append(predicted - true_age)
+        self.samples.append((true_age, predicted, low, high, confidence))
         if low <= true_age <= high:
             self.covered += 1
 
@@ -241,6 +273,9 @@ class RunReport:
     multi_detection: int = 0
     evaluated: int = 0
     margins: list[dict] = field(default_factory=list)
+    # Per-margin raw accumulators, for --dump-predictions. Excluded from
+    # to_dict() so the JSON report stays small.
+    stats: list["MarginStats"] = field(default_factory=list, repr=False)
     model: str = "unknown"
     stub: bool = True
     seconds: float = 0.0
@@ -304,7 +339,7 @@ def evaluate(
             if not results:
                 continue
             face = results[0]
-            stats[margin].add(face.age, sample.age, face.low, face.high)
+            stats[margin].add(face.age, sample.age, face.low, face.high, face.confidence)
 
             if save_crops is not None and saved < save_crops_limit * len(margins):
                 out_dir = save_crops / f"margin_{margin:.4f}"
@@ -320,6 +355,7 @@ def evaluate(
 
     report.seconds = time.monotonic() - started
     report.margins = [stats[m].summary() for m in margins]
+    report.stats = [stats[m] for m in margins]
     return report
 
 
@@ -417,7 +453,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Crop margins to sweep (default: the active CROP_MARGIN, {config.CROP_MARGIN})",
     )
-    parser.add_argument("--limit", type=int, default=None, help="Evaluate at most N images")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Evaluate at most N images, sampled evenly across the set (see --limit-head)",
+    )
+    parser.add_argument(
+        "--limit-head",
+        action="store_true",
+        help="Make --limit take the first N rows instead of an even spread (rarely what you want)",
+    )
     parser.add_argument(
         "--image-root",
         type=Path,
@@ -426,6 +472,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Extra root for resolving relative CSV paths (repeatable)",
     )
     parser.add_argument("--json", type=Path, default=None, help="Write the report as JSON")
+    parser.add_argument(
+        "--dump-predictions",
+        type=Path,
+        default=None,
+        help="Write per-sample predictions as CSV (margin, true, predicted, low, high, confidence)",
+    )
     parser.add_argument(
         "--save-crops",
         type=Path,
@@ -458,7 +510,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.limit is not None:
-        samples = samples[: args.limit]
+        samples = subsample(samples, args.limit, head=args.limit_head)
 
     margins = args.margins if args.margins else [config.CROP_MARGIN]
     for margin in margins:
@@ -487,6 +539,25 @@ def main(argv: list[str] | None = None) -> int:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8")
         log.info("Wrote %s", args.json)
+
+    if args.dump_predictions:
+        args.dump_predictions.parent.mkdir(parents=True, exist_ok=True)
+        with args.dump_predictions.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["margin", "true_age", "predicted", "low", "high", "confidence"])
+            for st in report.stats:
+                for true_age, predicted, low, high, conf in st.samples:
+                    writer.writerow(
+                        [
+                            f"{st.margin:.4f}",
+                            f"{true_age:.2f}",
+                            f"{predicted:.4f}",
+                            f"{low:.4f}",
+                            f"{high:.4f}",
+                            f"{conf:.4f}",
+                        ]
+                    )
+        log.info("Wrote %s", args.dump_predictions)
 
     return 0 if report.evaluated else 1
 
