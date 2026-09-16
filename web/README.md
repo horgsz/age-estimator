@@ -68,51 +68,60 @@ Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
 * **Tail caveats.** The model's error is not uniform across ages, so the UI says
   so where it matters. See below.
 
-### Caveats at the age extremes
+### Where the estimate is least reliable
 
 Thresholds and wording here are conditioned on the **predicted** age, because
-that is the only thing the UI knows. This matters: binned by *true* age the
-model looks catastrophic at the top (MAE 10.8 at 80+), but binned by what it
-actually displays the picture is quite different, because it rarely commits to
-an extreme number and is roughly right when it does.
+that is the only thing the UI knows. Binning by *true* age answers a question
+the UI cannot ask.
+
+These were re-derived after the decode changed from soft-expectation to the
+distribution median, and the change **inverted the previous conclusion**. The
+old decode suffered a label-smoothing pedestal that dragged every estimate
+toward 50, so both extremes were badly offset and both needed a warning. The
+median removes that, and with it both tail caveats.
 
 Measured end to end over 1,184 UTKFace test images at the shipped margin:
 
 | shown | n | MAE | bias |
 | ----: | -: | --: | ---: |
-| 0–5 | 25 | 3.09 | +1.54 |
-| 5–10 | 103 | 3.98 | +3.55 |
-| 10–12 | 23 | 4.63 | +3.49 |
-| 40–50 | 121 | 7.60 | +2.83 |
-| 65–70 | 34 | 8.19 | −0.20 |
-| 70–75 | 18 | 6.56 | −0.69 |
-| 75+ | 22 | 5.83 | −3.48 |
+| 0–5 | 109 | 0.98 | −0.71 |
+| 5–10 | 49 | 2.33 | −0.82 |
+| 10–12 | 13 | 3.54 | −2.31 |
+| 20–30 | 386 | 3.52 | −0.49 |
+| 30–40 | 226 | 5.90 | −0.02 |
+| 40–50 | 85 | 6.61 | +2.71 |
+| 50–60 | 138 | 7.18 | +2.09 |
+| 60–70 | 81 | 7.98 | +0.80 |
+| 70–75 | 16 | 7.81 | +2.56 |
+| 75+ | 34 | 4.82 | +0.59 |
 
-So the honest caveats are about a systematic **offset**, not about precision
-collapsing — and the young end is in fact the *most* accurate region by MAE.
+**There is no longer a young caveat.** Ages shown under 12 are now the most
+accurate region the model has — MAE 1.76 — and the output reaches down to 1, so
+there is no floor to warn about.
 
-* Shown **under 12** → runs ~3 years high, and the model never outputs below
-  about 3, so for an infant the number is a floor rather than a measurement.
-* Shown **over 65** → runs low, increasingly so with age. The model compresses
-  the top of its range: a face in its mid-eighties typically displays as ~70.
-  The threshold is 65 rather than 70 precisely because of that compression — at
-  70 the note would miss the very people it is for.
+**There is no longer an old-age caveat either**, and this one is subtle. Binned
+by *true* age the top still compresses (bias −7.8 at 80+), which is what an
+offline eval sees and is tempting to warn about. But binned by *displayed* age,
+everything shown at 80+ has bias **+1.10** — a ">= 80, reads low" rule would
+fire on a population it is not actually wrong about. There is no threshold at
+which a directional old-age warning is supportable.
+
+What remains is a real precision story in mid-to-late adulthood:
+
+* Shown **40–75** → 27% of cases, MAE **7.27** against **3.83** everywhere else,
+  with a mild tendency to read old. Nearly a 2x difference, so the UI says so.
 
 `tailCaveat()` in `src/overlay.ts` adds a short flag to the box label and a
 fuller explanation to the face card, both folded into the box's `aria-label` so
 the warning is not purely visual.
 
-The estimate is **not corrected**. Quietly subtracting the bias would bake a
+The estimate is **not corrected**. Quietly subtracting a bias would bake a
 dataset artefact into the served answer and hide the model's real behaviour.
 
-The worst band by MAE is actually **40–70** (7.0–8.2), not the extremes. It is
-deliberately not caveated — flagging most of the range would dilute the signal,
-and the confidence bar already varies there.
-
-For context on why a single number is shown at all: the predicted distribution's
-standard deviation averages **12.7 years** on the test set, far wider than the
-5.5-year MAE implies. The product decision is to lead with one number; the range
-remains in the API response and under the advanced panel.
+For context on why a single number is shown at all: the reported interval
+averages **11.8 years** wide, far wider than the 4.8-year MAE implies. The
+product decision is to lead with one number; the range remains in the API
+response and under the advanced panel.
 
 ### UI states
 
@@ -126,7 +135,7 @@ remains in the API response and under the advanced panel.
 | Server error / unreachable | The server's `detail` message, or a "start the API" hint |
 | Invalid crop margin | The server rejects it with 422 and the message is surfaced |
 | Stub model | A banner from `GET /health` warning that the ages are fake |
-| Age at either extreme | A caveat under the estimate when the shown age is < 12 or > 65 |
+| Age shown 40–75 | A caveat under the estimate: the model's least precise range |
 
 ## Mirroring — the easy bug
 

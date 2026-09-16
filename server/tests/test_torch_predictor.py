@@ -129,7 +129,7 @@ def test_health_style_checkpoint_identity(checkpoint):
     info = predictor.describe_checkpoint()
 
     assert info is not None
-    assert info["test_mae"] == pytest.approx(5.43)
+    assert info["recorded_test_mae"] == pytest.approx(5.43)
     assert len(info["sha256"]) == 12
     assert info["bytes"] > 0
     assert info["path"] == str(checkpoint)
@@ -147,7 +147,7 @@ def test_checkpoint_digest_tracks_file_contents(checkpoint, tmp_path):
     b = TorchPredictor(str(other), detector=FakeDetector([])).describe_checkpoint()
 
     assert a["sha256"] != b["sha256"]
-    assert a["test_mae"] != b["test_mae"]
+    assert a["recorded_test_mae"] != b["recorded_test_mae"]
 
 
 def test_stub_reports_no_checkpoint():

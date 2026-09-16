@@ -268,7 +268,7 @@ def test_metrics_are_arithmetically_correct(tmp_path, face_bgr, monkeypatch):
 def harness_result(box, age, std=3.0):
     from server.predictor import build_result
 
-    return build_result(box, age, std)
+    return build_result(box, age, age - std, age + std)
 
 
 def test_save_crops_writes_one_directory_per_margin(dataset, tmp_path):

@@ -10,6 +10,7 @@ from server.predictor import (
     StubPredictor,
     build_result,
     confidence_from_std,
+    confidence_from_width,
 )
 
 
@@ -307,18 +308,31 @@ def test_confidence_decreases_monotonically_with_std():
     assert 0.0 < values[-1] < 0.2
 
 
-def test_build_result_derives_interval_from_std():
-    r = build_result((1, 2, 3, 4), age=31.4, std=5.2)
-    assert r.age == pytest.approx(31.4)
-    assert r.low == pytest.approx(26.2)
-    assert r.high == pytest.approx(36.6)
+def test_build_result_derives_interval_from_quantiles():
+    r = build_result((1, 2, 3, 4), age=31.0, low=26.0, high=37.0)
+    assert r.age == pytest.approx(31.0)
+    assert r.low == pytest.approx(26.0)
+    assert r.high == pytest.approx(37.0)
+
+
+def test_build_result_allows_an_asymmetric_interval():
+    """Quantiles need not straddle the median evenly -- that is the point."""
+    r = build_result((0, 0, 1, 1), age=70.0, low=68.0, high=85.0)
+    assert r.low == 68.0 and r.high == 85.0
+    assert r.confidence == confidence_from_width(17.0)
 
 
 def test_build_result_clamps_the_interval():
-    r = build_result((0, 0, 10, 10), age=3.0, std=9.0)
+    r = build_result((0, 0, 10, 10), age=3.0, low=-6.0, high=12.0)
     assert r.low == 0.0
-    r = build_result((0, 0, 10, 10), age=99.0, std=9.0)
+    r = build_result((0, 0, 10, 10), age=99.0, low=90.0, high=108.0)
     assert r.high == 100.0
+
+
+def test_build_result_keeps_the_range_around_the_point_estimate():
+    """A degenerate interval must never exclude the number being shown."""
+    r = build_result((0, 0, 1, 1), age=40.0, low=45.0, high=38.0)
+    assert r.low <= r.age <= r.high
 
 
 def test_stub_predictor_is_stable_and_in_range():
@@ -326,32 +340,84 @@ def test_stub_predictor_is_stable_and_in_range():
     rng = np.random.default_rng(0)
     batch = rng.random((4, 3, 224, 224)).astype(np.float32)
 
-    ages_a, stds_a = stub._estimate(batch)
-    ages_b, stds_b = stub._estimate(batch)
+    d_a = stub._estimate(batch)
+    d_b = stub._estimate(batch)
 
-    assert np.array_equal(ages_a, ages_b)
-    assert np.array_equal(stds_a, stds_b)
-    assert ((ages_a >= 0) & (ages_a <= 100)).all()
-    assert (stds_a > 0).all()
-    assert len(set(ages_a.tolist())) == 4
+    assert np.array_equal(d_a.age, d_b.age)
+    assert np.array_equal(d_a.std, d_b.std)
+    assert ((d_a.age >= 0) & (d_a.age <= 100)).all()
+    assert (d_a.std > 0).all()
+    assert (d_a.low <= d_a.age).all() and (d_a.age <= d_a.high).all()
+    assert len(set(d_a.age.tolist())) == 4
 
 
-def test_soft_expectation_decoding_matches_the_contract():
-    """Mirror of TorchPredictor._estimate, verified on a known distribution."""
+def test_median_decode_ignores_a_label_smoothing_pedestal():
+    """The reason the decode is the median and not the mean.
+
+    Training used ``label_smoothing=0.1``, which trains a uniform pedestal
+    across all 101 bins. That pedestal's own expectation is exactly 50, so an
+    expectation decode returns ``0.9 * age + 5`` -- it drags every estimate
+    toward the middle of the range, which is what made a real 85-year-old read
+    as ~68 and an infant read as ~6. The median is robust to it.
+
+    This is pinned as a test because it is the whole justification for the
+    decode: if someone "simplifies" it back to an expectation, the child and
+    elderly estimates silently regress by several years.
+    """
     torch = pytest.importorskip("torch")
+    from server.predictor import LOW_Q, HIGH_Q
 
-    logits = torch.full((1, 101), -20.0)
+    true_age = 8
+    probs = torch.full((1, 101), 0.1 / 101)
+    probs[0, true_age] += 0.9
+    probs = probs / probs.sum()
+
+    bins = torch.arange(101, dtype=torch.float32)
+    expectation = (probs * bins).sum(dim=1).item()
+    cdf = probs.cumsum(dim=1)
+    median = int((cdf < 0.5).sum(dim=1).item())
+
+    # The pedestal pulls the mean 4+ years off a confidently-predicted child.
+    assert expectation == pytest.approx(0.9 * true_age + 5.0, abs=0.3)
+    assert expectation - true_age > 4.0
+    # The median lands on the actual mode.
+    assert median == true_age
+
+
+def test_quantile_decode_reads_straight_off_the_cdf():
+    """Mirror of TorchPredictor._estimate on a known bimodal distribution."""
+    torch = pytest.importorskip("torch")
+    from server.predictor import LOW_Q, HIGH_Q
+
+    logits = torch.full((1, 101), -30.0)
     logits[0, 30] = 0.0
     logits[0, 40] = 0.0  # 50/50 over ages 30 and 40
 
     probs = torch.softmax(logits, dim=1)
-    bins = torch.arange(101, dtype=torch.float32)
-    age = (probs * bins).sum(dim=1)
-    std = torch.sqrt((probs * (bins.unsqueeze(0) - age.unsqueeze(1)) ** 2).sum(dim=1))
+    cdf = probs.cumsum(dim=1)
 
-    assert age.item() == pytest.approx(35.0, abs=0.1)
-    assert std.item() == pytest.approx(5.0, abs=0.1)
+    def q(level):
+        return int((cdf < level).sum(dim=1).item())
 
-    result = build_result((0, 0, 1, 1), age.item(), std.item())
-    assert result.low == pytest.approx(30.0, abs=0.1)
-    assert result.high == pytest.approx(40.0, abs=0.1)
+    # cdf[30] == 0.5 exactly, so the first bin reaching 0.5 is 30.
+    assert q(0.5) == 30
+    assert q(LOW_Q) == 30
+    assert q(HIGH_Q) == 40
+
+    result = build_result((0, 0, 1, 1), q(0.5), q(LOW_Q), q(HIGH_Q))
+    assert result.age == 30.0
+    assert result.low == 30.0
+    assert result.high == 40.0
+
+
+def test_confidence_is_monotonic_in_interval_width():
+    widths = [0, 2, 6, 12, 24, 80]
+    values = [confidence_from_width(w) for w in widths]
+    assert values == sorted(values, reverse=True)
+    assert values[0] == pytest.approx(1.0)
+    assert 0.0 < values[-1] < 0.2
+
+
+def test_confidence_from_std_matches_the_equivalent_width():
+    """The shim must preserve the old scale, so UI thresholds still hold."""
+    assert confidence_from_std(5.0) == confidence_from_width(10.0)

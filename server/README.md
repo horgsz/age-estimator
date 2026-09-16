@@ -43,10 +43,18 @@ and the MAE the trainer claimed:
     "path": "/abs/path/checkpoints/age_model.pt",
     "sha256": "56894c480044",
     "bytes": 6606539,
-    "test_mae": 5.5472
+    "recorded_test_mae": 5.5472,
+    "recorded_test_mae_decode": "expectation",
+    "serving_decode": "median"
   }
 }
 ```
+
+`recorded_test_mae` is the figure **the checkpoint records about itself**, not
+the accuracy of what this server returns. It was measured with the expectation
+decode; we serve the median decode, which measures 4.762 end to end. The field
+is named that way so the two can never be confused — do not relabel it
+`test_mae`.
 
 `sha256` is the first 12 hex chars of the digest of the file's bytes, so it is
 directly comparable with `shasum -a 256 <path> | cut -c1-12`.
@@ -118,15 +126,38 @@ The margin used is echoed in the `X-Crop-Margin` response header.
 }
 ```
 
-It is a **DEX-style soft-expectation regressor**. The head is a distribution
-over ages 0..100; the server decodes it as
+The head is a distribution over ages 0..100. The server decodes it by
+**quantile**, not by expectation:
 
 ```
-age = Σ_i softmax(logits)_i · i
-std = sqrt( Σ_i softmax(logits)_i · (i − age)² )
-low, high = clamp(age ∓ std, 0, 100)
-confidence = 1 / (1 + std / 6)
+age        = min{ i : cumsum(softmax(logits))_i >= 0.50 }   # median
+low, high  = the 0.16 and 0.84 quantiles, read the same way
+confidence = 1 / (1 + (high − low) / 12)
 ```
+
+### Why the median and not the mean
+
+The checkpoint was trained with `label_smoothing=0.1`, which trains a uniform
+pedestal across all 101 bins. That pedestal's own expectation is exactly 50, so
+decoding by expectation returns roughly `0.9 · age + 5` — it drags every
+estimate toward the middle of the range. The median ignores the pedestal.
+
+Measured end to end over the 1,184-image test set at `CROP_MARGIN = 0.0`:
+
+| decode | MAE | CS@5 | bias | 85-year-old displays as |
+|---|---|---|---|---|
+| soft expectation | 5.477 | 55.5% | +2.11 | ~68 |
+| **median (shipped)** | **4.762** | **69.0%** | **+0.17** | **~78** |
+
+The interval is built from true CDF quantiles rather than `age ± σ`. σ is
+computed about the *mean*, so pairing it with a median point estimate would be
+subtly inconsistent, and σ is itself inflated by the same pedestal — it averaged
+12.7 years, which is why confidence used to read low on every face. The quantile
+interval averages 11.8 years wide and achieves 75% empirical coverage against a
+68% nominal target.
+
+`Decoded` retains the expectation and σ alongside the shipped median so the two
+decodes stay comparable on the same weights without another inference pass.
 
 `TorchPredictor` also adopts `meta["mean"]`, `meta["std"]` and
 `meta["input_size"]` from the checkpoint, so normalisation can never drift from

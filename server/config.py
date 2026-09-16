@@ -60,6 +60,14 @@ DEFAULT_MODEL_PATH = str(REPO_ROOT / "checkpoints" / "age_model.pt")
 # value. It costs 0.07 years end to end. The number above is chosen by measured
 # MAE, which is the thing we actually care about.
 #
+# CAVEAT on the table above: every row was measured with the soft-expectation
+# decode, which has since been replaced by the median decode (see predictor.py).
+# Margin 0.0 has been re-verified under the median decode end to end at MAE
+# 4.762, still the best number we have measured, and framing and readout are
+# largely orthogonal concerns -- but the full curve has NOT been re-swept. If
+# you are retuning the margin, re-run the sweep rather than trusting these
+# absolute values; their shape should hold, their levels will not.
+#
 # It was 0.4 before any of this was measured, which framed the face at ~31% of
 # the crop area against ~94% in training and cost 3.0 years of MAE while the
 # offline eval still reported 5.5. Erring wide remains the dangerous direction;

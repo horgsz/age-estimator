@@ -50,69 +50,70 @@ export function formatRange(face: FaceResult): string {
 }
 
 /**
- * Ages where the displayed number is systematically offset, and the app says so.
+ * Ages where the displayed number is least reliable, and the app says so.
  *
  * Thresholds and wording are conditioned on the *predicted* age, because that
- * is the only thing the UI knows. That distinction matters: binned by true age
- * the model looks catastrophic at the top (MAE 10.8 at 80+), but binned by what
- * it actually displays the picture is different, because it rarely commits to
- * an extreme number and is roughly right when it does.
+ * is the only thing the UI knows. Binning by true age answers a question the UI
+ * cannot ask.
+ *
+ * These numbers were re-derived after the decode changed from soft-expectation
+ * to the distribution median, and the change inverted the previous conclusion.
+ * Under the old decode a label-smoothing pedestal dragged every estimate toward
+ * 50, so the extremes were badly offset (a real 85-year-old displayed as ~68)
+ * and both tails needed a warning. The median ignores that pedestal, and the
+ * offsets largely vanished.
  *
  * Measured end to end over 1,184 UTKFace test images at the shipped margin:
  *
- *   shown    n     MAE    bias
- *   0–5      25    3.09   +1.54
- *   5–10    103    3.98   +3.55
- *   10–12    23    4.63   +3.49
- *   40–50   121    7.60   +2.83
- *   65–70    34    8.19   −0.20
- *   70–75    18    6.56   −0.69
- *   75+      22    5.83   −3.48
+ *   shown     n     MAE    bias
+ *   0–5     109    0.98   −0.71
+ *   5–10     49    2.33   −0.82
+ *   10–12    13    3.54   −2.31
+ *   20–30   386    3.52   −0.49
+ *   30–40   226    5.90   −0.02
+ *   40–50    85    6.61   +2.71
+ *   50–60   138    7.18   +2.09
+ *   60–70    81    7.98   +0.80
+ *   70–75    16    7.81   +2.56
+ *   75+      34    4.82   +0.59
  *
- * So the honest caveats are about a systematic *offset*, not about precision
- * collapsing. A shown age under 12 runs about 3 years high (and the model never
- * outputs below ~3, so it has a floor). A shown age over 65 runs low, and more
- * so the higher it goes — the model compresses the top of the range, which is
- * why a genuinely 85-year-old face typically displays around 70.
+ * Two consequences, both of which reverse earlier behaviour:
  *
- * We surface this rather than silently correcting it: a correction would bake a
- * dataset artefact into the served answer and hide it from the user.
+ * 1. The young caveat is GONE. Ages shown under 12 are now the most accurate
+ *    region the model has (MAE 1.76, bias −0.99) and the output reaches down to
+ *    1, so there is no floor to warn about. The old "likely younger than shown"
+ *    note would now be both unnecessary and pointing the wrong way.
  *
- * Note the worst band by MAE is actually 40–70 (7.0–8.2), not the extremes. It
- * is deliberately not caveated — flagging most of the range would dilute the
- * signal, and the confidence bar already varies there.
+ * 2. The old-age caveat is GONE TOO, and this one is subtle. Binned by *true*
+ *    age the top still compresses (bias −7.8 at 80+), which is what an offline
+ *    eval sees and it is tempting to warn about. But binned by *displayed* age,
+ *    everything shown at 80+ has bias +1.10 — a ">= 80, reads low" rule would
+ *    fire on a population it is not actually wrong about. There is no threshold
+ *    where a directional old-age warning is supportable.
+ *
+ * What is left is a genuine precision story in mid-to-late adulthood: 40–75 is
+ * 27% of cases at MAE 7.27, against 3.83 everywhere else. That is nearly a 2x
+ * difference and it is worth telling the user about, so it is the only caveat.
  */
-const YOUNG_TAIL = 12;
-// 65 rather than 70: tail compression means an 85-year-old typically displays
-// around 70, so a threshold at 70 misses the very cases the note is for.
-const OLD_TAIL = 65;
+const MID_LOW = 40;
+const MID_HIGH = 75;
 
 export interface TailCaveat {
-  kind: 'young' | 'old';
+  kind: 'mid';
   short: string;
   long: string;
 }
 
 export function tailCaveat(age: number): TailCaveat | null {
-  if (age < YOUNG_TAIL) {
+  if (age >= MID_LOW && age < MID_HIGH) {
     return {
-      kind: 'young',
-      short: 'likely younger than shown',
+      kind: 'mid',
+      short: 'less precise in this range',
       long:
-        'The model reads high for young faces — by about 3 years in this range, ' +
-        'and it never outputs an age below roughly 3. A child is probably ' +
-        'younger than this says, and for an infant the number is the model’s ' +
-        'floor rather than a measurement.',
-    };
-  }
-  if (age > OLD_TAIL) {
-    return {
-      kind: 'old',
-      short: 'likely older than shown',
-      long:
-        'The model compresses the top of its range, so older faces read low and ' +
-        'increasingly so with age — a face in its mid-eighties typically shows ' +
-        'as about 70. The true age is likely higher than this says.',
+        'Middle and later adulthood is this model’s weakest range: estimates ' +
+        'here are typically off by about 7 years, against roughly 4 elsewhere, ' +
+        'and they tend to read slightly old. Treat the number as a broad ' +
+        'bracket rather than a reading.',
     };
   }
   return null;
