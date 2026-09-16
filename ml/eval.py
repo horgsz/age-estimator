@@ -3,6 +3,18 @@
 Reports overall MAE / CS@5, a per-decade MAE breakdown with support counts, and
 writes a predicted-vs-true scatter plot. Also stamps the real test MAE into the
 checkpoint's ``meta`` block so the published artifact matches the contract.
+
+Two things to know before reusing these numbers downstream:
+
+* The per-decade table conditions on **true** age, which is correct for judging
+  a model but is *not* actionable by a UI, which can only threshold on the value
+  it displays. The two views disagree sharply at the tails -- under the median
+  decode the 80+ bias is -7.81 by true age but +1.10 by displayed age. See
+  "The tail bias does not survive re-conditioning" in ``ml/README.md``.
+* This script decodes with the soft expectation for continuity with the original
+  spec. The shipped serving decode is the **median** (``AgeEstimator.median``),
+  which scores better on every axis; see ``decode_compare.py``. So the figures
+  here, and ``meta["test_mae"]``, are expectation-decode numbers.
 """
 
 from __future__ import annotations

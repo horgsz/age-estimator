@@ -177,9 +177,18 @@ iqr = (cdf < 0.75).sum(axis=1) - (cdf < 0.25).sum(axis=1)   # uncertainty
 `AgeEstimator.median()` in `ml/model.py` does exactly this for the PyTorch path;
 `AgeEstimator.expectation()` retains the mean/std decode for comparison.
 
-Use the IQR rather than the standard deviation as the confidence signal when
-decoding with the median -- both describe the same distribution, but the IQR is
-robust to the same tail mass the median is.
+Use quantiles rather than the standard deviation as the confidence signal when
+decoding with the median -- both describe the same distribution, but quantiles
+are robust to the same tail mass the median is.
+
+This matters more than consistency. **The label-smoothing pedestal inflates
+`sigma` exactly as it biases the mean**, so the uncertainty channel was
+miscalibrated too: the server session measured mean `sigma` 12.7 years giving
+**93.3% coverage on a nominally-68% interval** -- the confidence bar read
+falsely wide on every face. Switching to 0.16/0.84 CDF quantiles gives 11.8
+years mean width and **75% coverage against 68% nominal**. One decode change
+fixes the point estimate and the interval together, because one mechanism was
+corrupting both.
 
 ## Results
 
@@ -263,6 +272,30 @@ Two consequences worth carrying:
   improves from -10.80 to -7.47, so predictions that were unreachable at the top
   of the range become reachable. Recompute this table under whichever decode
   ships rather than porting these numbers across.
+
+#### The tail bias does not survive re-conditioning
+
+Under the shipped median decode, the old-age bias inverts depending on which
+variable you condition on — measured end to end by the server session:
+
+| rule | n | bias |
+| --- | --- | --- |
+| true age >= 80 | 32 | **-7.81** |
+| **shown** >= 80 | 21 | **+1.10** |
+| **shown** >= 65 | 80 | +1.04 |
+
+Both numbers are correct and they are not in conflict; they answer different
+questions. `eval.py`'s per-decade table conditions on **true** age, which is the
+right frame for judging a model. A UI can only condition on what it displays.
+Under median an 85-year-old now shows as ~77.7 (was ~67.7), so the residual
+compression no longer pushes anyone past a high threshold — which means a
+">= 80 is unreliable" caveat never fires on the population it exists for, and
+would fire only on people the model got roughly right.
+
+**So do not port `eval.py`'s tail-bias figure into product logic.** The
+actionable signal under median is mid-adulthood precision: shown 40-75 is 27% of
+cases at MAE 7.27, against 3.83 elsewhere. Ages shown under 12 are now the
+*best* region (MAE 1.76), not the worst.
 
 ### Decoding: the mean is the wrong statistic
 
@@ -480,12 +513,31 @@ UTKFace. Three corpora with documented real ages would settle it:
 | **AgeDB** | manually collected and verified real ages, wide age range, good 70+ support where UTKFace is thinnest |
 | **APPA-REAL** | carries *both* real and apparent-age labels, so it can separate "wrong" from "looks that age" — the distinction our metric currently cannot make |
 
+A sharper version of the same point, raised by the server session: because
+UTKFace labels are themselves softmax-expectation estimates, and expectation
+decoding is precisely what produced the compression we removed, **the in-corpus
+score may flatter a median decode differently than it flattered the mean**. The
+4.84 is agreement-with-DEX under a decode DEX did not use. That does not make
+the improvement unreal — it survived the detector path end to end — but it does
+mean the *size* of it is measured against a yardstick with a related bias.
+
 Running the shipped checkpoint over these unchanged would give a true-error
 figure to sit beside the in-corpus 5.547, and the gap between them is the
 label-noise floor we can currently only assert. Also worth revisiting once
 that baseline exists: a class-balanced or age-weighted loss for the thin tails,
 which was not attempted here because in-corpus validation could not have told
 us whether it helped or merely fit the labels' bias more closely.
+
+### Known-stale measurements
+
+- The **crop-margin sweep above was measured under the soft-expectation
+  decode.** Margin 0.0 has been re-verified under median end to end (4.762), but
+  the full curve has not been re-swept. The shape is expected to hold and the
+  levels to drop; until that is redone, treat the absolute MAE values in those
+  tables as expectation-decode figures and the *shape* as the load-bearing part.
+- The per-decade and per-decile tables in `reports/metrics.json` are likewise
+  expectation-decoded, since `eval.py` still defaults to that decode for
+  continuity with the original spec.
 
 ## Files
 
