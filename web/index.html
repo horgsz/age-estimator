@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Age estimator</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <main class="app">
+      <header class="app__header">
+        <h1>Age estimator</h1>
+        <p class="app__sub">
+          Point a camera at a face, or drop in a photo. Ages are reported as a
+          range, because a single number would be a lie.
+        </p>
+        <div id="model-banner" class="banner banner--hidden" role="status"></div>
+      </header>
+
+      <section class="panel" aria-labelledby="capture-heading">
+        <h2 id="capture-heading" class="panel__title">Capture</h2>
+
+        <div id="camera-stage" class="stage">
+          <video id="preview" class="stage__media" playsinline muted autoplay></video>
+          <div id="camera-message" class="stage__message">
+            <p id="camera-message-text">Camera is off.</p>
+            <button id="enable-camera" class="btn btn--primary" type="button">
+              Enable camera
+            </button>
+          </div>
+        </div>
+
+        <div class="controls">
+          <label class="control control--grow">
+            <span class="control__label">Camera</span>
+            <select id="device-select" class="control__input" disabled>
+              <option value="">No cameras found</option>
+            </select>
+          </label>
+
+          <label class="control control--check">
+            <input id="mirror-toggle" type="checkbox" checked />
+            <span>Mirror (selfie view)</span>
+          </label>
+        </div>
+
+        <div class="controls">
+          <button id="capture" class="btn btn--primary" type="button" disabled>
+            Capture &amp; estimate
+          </button>
+          <button id="choose-file" class="btn" type="button">Upload a photo…</button>
+          <input id="file-input" type="file" accept="image/*" hidden />
+        </div>
+
+        <div id="dropzone" class="dropzone" tabindex="0" role="button"
+             aria-label="Drop an image here to estimate age">
+          <span>Drag &amp; drop an image here</span>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="result-heading">
+        <h2 id="result-heading" class="panel__title">Result</h2>
+
+        <div id="status" class="status status--idle" role="status" aria-live="polite">
+          Nothing analysed yet.
+        </div>
+
+        <div id="result-stage" class="stage stage--result stage--empty">
+          <canvas id="result-canvas" class="stage__media"></canvas>
+          <div id="overlay" class="overlay"></div>
+        </div>
+
+        <ul id="face-list" class="faces"></ul>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
