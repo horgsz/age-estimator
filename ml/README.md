@@ -108,6 +108,77 @@ sigma = np.sqrt((probs * (bins - age[:, None]) ** 2).sum(axis=1))
 
 `AgeEstimator.predict()` in `ml/model.py` does exactly this for the PyTorch path.
 
+## Results
+
+Test split (1,185 held-out images), `checkpoints/age_model.pt`:
+
+| metric | value |
+| --- | --- |
+| MAE | **5.75 years** |
+| CS@5 | **52.2%** |
+| RMSE | 7.67 years |
+| mean bias | +2.35 years |
+
+Per-decade breakdown — the interesting part, because UTKFace is heavily skewed
+toward ages 20-35:
+
+| decade | support | MAE | CS@5 | bias |
+| --- | --- | --- | --- | --- |
+| 0-9 | 154 | 5.64 | 53.2% | +5.64 |
+| 10-19 | 76 | 5.66 | 53.9% | +4.96 |
+| 20-29 | 368 | 5.32 | 54.6% | +4.83 |
+| 30-39 | 228 | 4.86 | 62.3% | +2.07 |
+| 40-49 | 112 | 5.86 | 42.9% | +0.01 |
+| 50-59 | 116 | 7.03 | 43.1% | -0.11 |
+| 60-69 | 65 | 6.00 | 52.3% | -2.19 |
+| 70-79 | 34 | 8.18 | 29.4% | -7.47 |
+| 80+ | 32 | 9.56 | 34.4% | -9.37 |
+
+The bias column is monotonically decreasing, which is textbook regression toward
+the mean: the model is pulled toward the data-rich 20-40 band and compresses
+both tails. Note that for ages 0-9 the MAE and the bias are identical (+5.64),
+meaning the model *never* under-predicts a child. The 80+ decade is off by
+-9.4 years on 32 test images. Treat predictions below ~15 and above ~70 as
+weakly supported.
+
+Training peaked at epoch 14/30 (val MAE 5.709) and then overfit, with train loss
+falling to 1.76 while val MAE drifted back to ~6.1. Best-val checkpointing keeps
+the epoch-14 weights. A regularized variant (`--wd 0.05 --mixup 0.2`) was tried
+and was **worse** (val MAE 6.07): mixing two faces produces an image with no
+well-defined age, which fights the ordinal soft-expectation head. The `--mixup`
+flag remains available but defaults to off.
+
+## Crop-margin sensitivity
+
+The serving path crops `side = max(w, h) * (1 + 2 * CROP_MARGIN)` around a YuNet
+detection. UTKFace is already tightly cropped, so training framing corresponds
+to a specific margin, and inference must reproduce it.
+
+`measure_crop_margin.py` over 300 random images (300/300 detected, 0% failure)
+gives a median implied margin of **0.0135**, IQR [0.0012, 0.0268].
+
+`margin_sweep.py` measures what framing error actually costs:
+
+| CROP_MARGIN | MAE | CS@5 |
+| --- | --- | --- |
+| 0.00 | 5.72 | 54.6% |
+| **0.0135** | **5.75** | **52.2%** |
+| 0.05 | 5.90 | 52.7% |
+| 0.10 | 6.21 | 51.8% |
+| 0.15 | 7.39 | 46.6% |
+| 0.20 | 9.01 | 40.9% |
+| 0.30 | 11.55 | 30.4% |
+| 0.40 | 13.60 | 25.1% |
+
+Margins up to ~0.10 cost less than half a year. Beyond that it degrades sharply:
+a 0.4 margin more than doubles the error to 13.6 years. Keep `CROP_MARGIN` at
+**0.0135 (±0.05)**. Wider framings are simulated with replicate padding, so
+those rows are indicative rather than exact, but the trend is unambiguous.
+
+Note that `RandomResizedCrop(scale=(0.8, 1.0))` only ever crops *in*, so it buys
+tolerance to framings tighter than UTKFace and none to wider ones. The margin
+constant has to be right; augmentation will not paper over it.
+
 ## Files
 
 | file | purpose |
@@ -117,5 +188,7 @@ sigma = np.sqrt((probs * (bins - age[:, None]) ** 2).sum(axis=1))
 | `train.py` | training loop |
 | `eval.py` | test-set metrics, per-decade breakdown, scatter plot |
 | `export_onnx.py` | ONNX export + parity verification |
+| `measure_crop_margin.py` | YuNet margin measurement (serving/training framing) |
+| `margin_sweep.py` | MAE vs. crop-margin sensitivity |
 | `splits/` | committed train/val/test CSVs |
 | `reports/` | metrics, training history, scatter plot |

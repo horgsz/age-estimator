@@ -97,6 +97,17 @@ def amp_is_stable(model: nn.Module, device: torch.device, criterion: nn.Module) 
     return bool(ok)
 
 
+def mixup_batch(
+    images: torch.Tensor, targets: torch.Tensor, alpha: float
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+    """Return mixed images plus the pair of targets and the mixing weight."""
+    lam = float(torch.distributions.Beta(alpha, alpha).sample())
+    lam = max(lam, 1.0 - lam)  # keep the dominant label dominant
+    perm = torch.randperm(images.size(0), device=images.device)
+    mixed = lam * images + (1.0 - lam) * images[perm]
+    return mixed, targets, targets[perm], lam
+
+
 @torch.no_grad()
 def evaluate(
     model: AgeEstimator, loader: DataLoader, device: torch.device
@@ -161,11 +172,27 @@ def train(args: argparse.Namespace) -> float:
             targets = ages.clamp(0, NUM_BINS - 1).to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
+            if args.mixup > 0:
+                images, target_a, target_b, lam = mixup_batch(
+                    images, targets, args.mixup
+                )
+
+                def compute_loss() -> torch.Tensor:
+                    logits = model(images)
+                    return lam * criterion(logits, target_a) + (1.0 - lam) * criterion(
+                        logits, target_b
+                    )
+
+            else:
+
+                def compute_loss() -> torch.Tensor:
+                    return criterion(model(images), targets)
+
             if use_amp:
                 with torch.autocast(device_type=device.type, dtype=torch.float16):
-                    loss = criterion(model(images), targets)
+                    loss = compute_loss()
             else:
-                loss = criterion(model(images), targets)
+                loss = compute_loss()
 
             if not torch.isfinite(loss):
                 raise RuntimeError(f"Non-finite loss at epoch {epoch} step {step}")
@@ -227,6 +254,12 @@ def main() -> None:
     parser.add_argument("--wd", type=float, default=1e-4)
     parser.add_argument("--label-smoothing", type=float, default=0.1)
     parser.add_argument("--clip-grad", type=float, default=5.0)
+    parser.add_argument(
+        "--mixup",
+        type=float,
+        default=0.0,
+        help="mixup alpha; 0 disables. Helps when the head overfits.",
+    )
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto")
