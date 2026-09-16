@@ -171,8 +171,11 @@ def build_transforms(train: bool) -> transforms.Compose:
         )
     return transforms.Compose(
         [
-            transforms.Resize(INPUT_SIZE + 32),
-            transforms.CenterCrop(INPUT_SIZE),
+            # Plain resize to exactly 224x224, matching the serving path (square
+            # crop -> resize 224). A Resize+CenterCrop would keep only
+            # (224/256)^2 = 0.77 of the frame, which is both tighter than
+            # inference and below the train-time RandomResizedCrop scale floor.
+            transforms.Resize((INPUT_SIZE, INPUT_SIZE)),
             transforms.ToTensor(),
             normalize,
         ]
