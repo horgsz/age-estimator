@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -105,15 +106,34 @@ class AgePredictor:
         return self._detector
 
     def predict(self, image_bgr: np.ndarray) -> list[FaceResult]:
-        boxes = self.detector.detect(image_bgr)
+        """Detect faces in ``image_bgr`` and age each one."""
+        return self.predict_boxes(image_bgr, self.detector.detect(image_bgr))
+
+    def predict_boxes(
+        self,
+        image_bgr: np.ndarray,
+        boxes: Sequence[BBox],
+        margin: float | None = None,
+    ) -> list[FaceResult]:
+        """Age pre-detected ``boxes``, skipping detection.
+
+        This is the crop + model half of :meth:`predict`, split out so callers
+        that already have boxes -- notably the offline eval harness, which
+        detects once and then sweeps several crop margins -- run the *exact*
+        same path the server does rather than a lookalike reimplementation.
+        """
         if not boxes:
             return []
 
         batch = np.stack(
-            [preprocessing.preprocess_face(image_bgr, box) for box in boxes]
+            [preprocessing.preprocess_face(image_bgr, box, margin) for box in boxes]
         ).astype(np.float32)
-        ages, stds = self._estimate(batch)
+        ages, stds = self.estimate_batch(batch)
         return [build_result(box, a, s) for box, a, s in zip(boxes, ages, stds)]
+
+    def estimate_batch(self, batch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Run the model over a batch of preprocessed crops (float32, NCHW)."""
+        return self._estimate(batch)
 
     def _estimate(self, batch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         raise NotImplementedError

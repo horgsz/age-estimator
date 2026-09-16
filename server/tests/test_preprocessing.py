@@ -25,6 +25,56 @@ def test_crop_box_is_square_and_applies_margin():
     assert y + h / 2 == pytest.approx(500, abs=1)
 
 
+# --------------------------------------------------------------------------
+# the default margin
+# --------------------------------------------------------------------------
+
+
+def test_default_crop_margin_matches_the_measured_utkface_framing():
+    """UTKFace aligned+cropped is ~the raw YuNet box; measured median 0.0135.
+
+    This is deliberately a hard-coded expectation: if someone changes the
+    default, it should be a conscious decision backed by a new measurement,
+    not a drive-by edit.
+    """
+    assert config.DEFAULT_CROP_MARGIN == pytest.approx(0.0135)
+    assert config.CROP_MARGIN == pytest.approx(0.0135)
+
+
+def test_crop_margin_is_read_from_the_environment_at_startup(monkeypatch):
+    """`CROP_MARGIN=... make api` must work with no code edit."""
+    monkeypatch.setenv("CROP_MARGIN", "0.25")
+    try:
+        config.reload_from_env()
+        assert config.CROP_MARGIN == pytest.approx(0.25)
+
+        # ...and it must be honoured by callers, not captured at import time.
+        img = np.zeros((1000, 1000, 3), np.uint8)
+        _, _, w, _ = preprocessing.compute_crop_box((400, 400, 100, 100), img.shape[:2])
+        assert w == pytest.approx(150, abs=1)  # 100 * (1 + 2*0.25)
+    finally:
+        monkeypatch.delenv("CROP_MARGIN", raising=False)
+        config.reload_from_env()
+
+    assert config.CROP_MARGIN == pytest.approx(config.DEFAULT_CROP_MARGIN)
+
+
+def test_invalid_crop_margin_env_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("CROP_MARGIN", "not-a-number")
+    try:
+        config.reload_from_env()
+        assert config.CROP_MARGIN == pytest.approx(config.DEFAULT_CROP_MARGIN)
+    finally:
+        monkeypatch.delenv("CROP_MARGIN", raising=False)
+        config.reload_from_env()
+
+
+def test_tight_margin_crop_is_barely_larger_than_the_detector_box():
+    img = np.zeros((1000, 1000, 3), np.uint8)
+    _, _, w, _ = preprocessing.compute_crop_box((400, 400, 200, 200), img.shape[:2])
+    assert w == pytest.approx(200 * (1 + 2 * 0.0135), abs=1)
+
+
 def test_margin_zero_gives_the_tight_square():
     img = np.zeros((500, 500, 3), np.uint8)
     _, _, w, _ = preprocessing.compute_crop_box((100, 100, 60, 90), img.shape[:2], margin=0.0)
@@ -81,6 +131,147 @@ def test_normalize_produces_rgb_channel_order():
     tensor = preprocessing.normalize(bgr)
     assert tensor[0].mean() > tensor[1].mean()
     assert tensor[0].mean() > tensor[2].mean()
+
+
+# --------------------------------------------------------------------------
+# faces flush against the frame edge
+#
+# At the measured margin (~0.0135) the square barely exceeds the detector box,
+# so any face near an edge lands on the clamp path -- far more often than it did
+# at 0.4. These tests pin the two properties that matter there: the crop stays
+# square at the requested size, and the face keeps its apparent scale.
+# --------------------------------------------------------------------------
+
+FACE_COLOR = (200, 180, 160)
+
+
+def scene_with_face(img_w: int, img_h: int, box: tuple[int, int, int, int]) -> np.ndarray:
+    """Dark frame with a uniquely-coloured rectangle standing in for a face."""
+    img = np.full((img_h, img_w, 3), 30, np.uint8)
+    x, y, w, h = box
+    img[y : y + h, x : x + w] = FACE_COLOR
+    return img
+
+
+def count_face_pixels(image: np.ndarray) -> int:
+    return int(np.all(image == np.asarray(FACE_COLOR, np.uint8), axis=-1).sum())
+
+
+EDGE_CASES = {
+    "flush-left": (0, 200, 120, 160),
+    "flush-right": (640 - 120, 200, 120, 160),
+    "flush-top": (260, 0, 120, 160),
+    "flush-bottom": (260, 480 - 160, 120, 160),
+    "corner-top-left": (0, 0, 120, 160),
+    "corner-bottom-right": (640 - 120, 480 - 160, 120, 160),
+    "centred": (260, 160, 120, 160),
+}
+
+
+@pytest.mark.parametrize("name", sorted(EDGE_CASES))
+def test_edge_flush_face_crop_is_square_and_unscaled(name):
+    box = EDGE_CASES[name]
+    img = scene_with_face(640, 480, box)
+
+    geom = preprocessing.compute_crop_geometry(box, img.shape[:2])
+    crop = preprocessing.crop_face(img, box)
+
+    expected_side = round(max(box[2], box[3]) * (1 + 2 * config.CROP_MARGIN))
+    assert geom.side == pytest.approx(expected_side, abs=1)
+
+    # Square, at exactly the requested size -- never squashed, never shrunk.
+    assert crop.shape[0] == crop.shape[1] == geom.side
+
+    # The square fits in a 640x480 frame, so no padding should be needed at all.
+    assert not geom.needs_padding
+    assert geom.w == geom.h == geom.side
+
+    # Stays inside the image...
+    assert 0 <= geom.x and geom.x + geom.w <= 640
+    assert 0 <= geom.y and geom.y + geom.h <= 480
+
+    # ...and still contains the whole detector box.
+    assert geom.x <= box[0] and geom.x + geom.w >= box[0] + box[2]
+    assert geom.y <= box[1] and geom.y + geom.h >= box[1] + box[3]
+
+    # Scale is untouched: every face pixel survives, none are duplicated.
+    assert count_face_pixels(crop) == box[2] * box[3]
+
+
+@pytest.mark.parametrize("name", sorted(EDGE_CASES))
+def test_edge_flush_face_survives_the_full_pipeline(name):
+    box = EDGE_CASES[name]
+    img = scene_with_face(640, 480, box)
+    tensor = preprocessing.preprocess_face(img, box)
+    assert tensor.shape == (3, config.INPUT_SIZE, config.INPUT_SIZE)
+    assert np.isfinite(tensor).all()
+
+
+def test_face_filling_the_whole_frame_is_padded_not_zoomed():
+    """A 200x200 UTKFace-style image where the detection fills the frame.
+
+    The square (205 px at the measured margin) cannot fit, so the deficit is
+    edge-padded. The face must still end up at 200/205 of the crop -- padding to
+    the *available* region instead of the *requested* square would silently zoom
+    the face to fill 100% of it, which is a framing change the model would see.
+    """
+    box = (0, 0, 200, 200)
+    img = scene_with_face(200, 200, box)
+
+    geom = preprocessing.compute_crop_geometry(box, img.shape[:2])
+    crop = preprocessing.crop_face(img, box)
+
+    assert geom.needs_padding
+    assert crop.shape[0] == crop.shape[1] == geom.side
+    assert geom.side == pytest.approx(round(200 * (1 + 2 * 0.0135)), abs=1)
+    assert 200 / geom.side == pytest.approx(0.976, abs=0.01)
+
+    # Padding is symmetric, so the face stays centred.
+    assert abs(geom.pad_left - geom.pad_right) <= 1
+    assert abs(geom.pad_top - geom.pad_bottom) <= 1
+
+
+def test_oversized_square_keeps_scale_at_a_wide_margin():
+    box = (0, 0, 200, 200)
+    img = scene_with_face(200, 200, box)
+
+    geom = preprocessing.compute_crop_geometry(box, img.shape[:2], margin=0.2)
+    crop = preprocessing.crop_face(img, box, margin=0.2)
+
+    assert geom.side == 280
+    assert crop.shape[:2] == (280, 280)
+    # The face occupies 200/280 of the crop, not all of it.
+    assert 200 / crop.shape[0] == pytest.approx(0.714, abs=0.01)
+
+
+def test_geometry_padding_always_sums_to_the_requested_side():
+    rng = np.random.default_rng(1234)
+    for _ in range(300):
+        img_w = int(rng.integers(40, 800))
+        img_h = int(rng.integers(40, 800))
+        w = int(rng.integers(8, img_w + 1))
+        h = int(rng.integers(8, img_h + 1))
+        x = int(rng.integers(0, img_w - w + 1))
+        y = int(rng.integers(0, img_h - h + 1))
+        margin = float(rng.uniform(-0.2, 1.0))
+
+        geom = preprocessing.compute_crop_geometry((x, y, w, h), (img_h, img_w), margin)
+        assert geom.pad_left + geom.w + geom.pad_right == geom.side
+        assert geom.pad_top + geom.h + geom.pad_bottom == geom.side
+        assert geom.pad_left >= 0 and geom.pad_right >= 0
+        assert geom.pad_top >= 0 and geom.pad_bottom >= 0
+        assert 0 <= geom.x and geom.x + geom.w <= img_w
+        assert 0 <= geom.y and geom.y + geom.h <= img_h
+
+        crop = preprocessing.crop_face(np.zeros((img_h, img_w, 3), np.uint8), (x, y, w, h), margin)
+        assert crop.shape[0] == crop.shape[1] == geom.side
+
+
+def test_negative_margin_crops_inside_the_detector_box():
+    """The UTKFace measurement had a p05 of -0.0149, so this must not explode."""
+    img = np.zeros((500, 500, 3), np.uint8)
+    _, _, w, _ = preprocessing.compute_crop_box((200, 200, 100, 100), img.shape[:2], margin=-0.1)
+    assert w == pytest.approx(80, abs=1)
 
 
 # --------------------------------------------------------------------------
