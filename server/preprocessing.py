@@ -10,23 +10,28 @@ module has to change with it, otherwise inference silently sees
 out-of-distribution inputs and the predicted ages drift with no visible error.
 The knobs live in ``server/config.py``.
 
-Why ``CROP_MARGIN`` defaults to ~0.0135
----------------------------------------
-Measured, not guessed. YuNet was run over 300 random UTKFace images (300/300
-detected) and the margin implied by UTKFace's own native framing was solved for
-as ``m = (200 / max(w_det, h_det) - 1) / 2``. Median **0.0135**, IQR
-[0.0012, 0.0268]. UTKFace aligned+cropped is essentially the raw detector box
-with about 1% of margin -- far tighter than the 0.4 we first assumed, which put
-the face at ~31% of the frame by area against ~94% in training.
+Why ``CROP_MARGIN`` defaults to 0.0
+-----------------------------------
+Measured end to end, not guessed. Two independent sweeps over the 1,185-image
+UTKFace test split -- ``ml/``'s, which re-frames ground-truth crops, and this
+server's ``tools/eval_end_to_end.py``, which runs real YuNet detection and then
+this crop -- both put the minimum at 0.0 (5.495 and 5.477 MAE respectively), and
+agree within 0.07 years at every margin from -0.05 to 0.2. That agreement is the
+useful part: it says the detector path does not shift framing, so a constant
+measured offline transfers to the deployed path.
 
-Erring **wide is the dangerous direction**: training augments with
-``RandomResizedCrop(scale=(0.8, 1.0))``, which only ever crops *in*, so the
-model has some tolerance to framings tighter than UTKFace and none to wider
-ones.
+UTKFace aligned+cropped is essentially the raw detector box -- far tighter than
+the 0.4 we first assumed, which put the face at ~31% of the frame by area
+against ~94% in training and cost ~3 years of MAE invisibly.
+
+Erring **wide is the dangerous direction**: the curve is strongly asymmetric.
+Cropping tighter than training costs almost nothing (-0.05 is +0.11 years),
+cropping wider degrades steeply (0.2 is +0.71, 0.4 is +2.97). Anything in
+[-0.05, +0.05] sits within ~0.11 years, which absorbs detector jitter.
 
 Geometry
 --------
-At a margin this tight the square barely exceeds the detector box, so the
+At a margin this tight the square is exactly the detector box, so the
 clamp-to-image-bounds path is hit far more often than it was at 0.4 -- any face
 near a frame edge reaches it. Two rules keep that honest:
 

@@ -201,7 +201,7 @@ def test_estimate_echoes_the_default_crop_margin(client, face_bytes):
     resp = post_image(client, face_bytes)
     assert resp.status_code == 200
     assert float(resp.headers["X-Crop-Margin"]) == pytest.approx(config.CROP_MARGIN)
-    assert float(resp.headers["X-Crop-Margin"]) == pytest.approx(0.0135)
+    assert float(resp.headers["X-Crop-Margin"]) == pytest.approx(0.0)
 
 
 @pytest.mark.parametrize("where", ["query", "form"])

@@ -32,18 +32,31 @@ DEFAULT_MODEL_PATH = str(REPO_ROOT / "checkpoints" / "age_model.pt")
 
 # The margin between the YuNet detection box and the square we feed the model.
 #
-# Measured, not guessed: YuNet over 300 random UTKFace images (300/300 detected)
-# solving m = (200 / max(w_det, h_det) - 1) / 2 for UTKFace's own native framing
-# gives a median of 0.0135 (IQR [0.0012, 0.0268]). UTKFace aligned+cropped is
-# essentially the raw detector box plus ~1%.
+# Measured end to end, not guessed. Two independent sweeps over the 1,185-image
+# UTKFace test split agree that the optimum is 0.0:
 #
-# This was 0.4 before it was measured, which framed the face at ~31% of the crop
-# area against ~94% in training. Erring wide is the dangerous direction: the
-# training augmentation (RandomResizedCrop scale=(0.8, 1.0)) only ever crops in,
-# so the model tolerates tighter framing than UTKFace but not wider.
+#   margin   ml/ (re-framed crops)   server (YuNet -> this crop -> model)
+#   -0.050   5.548                   5.590
+#   -0.025   5.501                   5.574
+#    0.000   5.495                   5.477   <- both minima
+#    0.0135  5.547                   5.551
+#    0.050   5.706                   5.688
+#    0.100   5.949                   5.880
+#    0.200   6.264                   6.190
+#    0.400   --                      8.442
+#
+# The two curves agree within 0.07 years everywhere, which is the useful result:
+# running real detection instead of re-framing ground-truth crops does not shift
+# the framing, so the constant measured offline transfers to the deployed path.
+#
+# It was 0.4 before any of this was measured, which framed the face at ~31% of
+# the crop area against ~94% in training and cost 3.0 years of MAE while the
+# offline eval still reported 5.5. Erring wide remains the dangerous direction;
+# the curve is markedly asymmetric and anything in [-0.05, +0.05] is within
+# ~0.11 years, so there is comfortable headroom for detector jitter.
 #
 # See preprocessing.py -- this is the number to keep in sync with training.
-DEFAULT_CROP_MARGIN = 0.0135
+DEFAULT_CROP_MARGIN = 0.0
 
 # Bounds for a per-request `crop_margin` override on POST /estimate. Negative
 # margins crop inside the detector box; the UTKFace measurement had a p05 of

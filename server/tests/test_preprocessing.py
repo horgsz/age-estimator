@@ -30,15 +30,18 @@ def test_crop_box_is_square_and_applies_margin():
 # --------------------------------------------------------------------------
 
 
-def test_default_crop_margin_matches_the_measured_utkface_framing():
-    """UTKFace aligned+cropped is ~the raw YuNet box; measured median 0.0135.
+def test_default_crop_margin_matches_the_measured_optimum():
+    """0.0 is the joint minimum of two independent end-to-end sweeps.
+
+    Both ml/'s re-framed-crop sweep (5.495) and this server's YuNet -> crop ->
+    model sweep (5.477) bottom out at 0.0 on the 1,185-image test split.
 
     This is deliberately a hard-coded expectation: if someone changes the
     default, it should be a conscious decision backed by a new measurement,
     not a drive-by edit.
     """
-    assert config.DEFAULT_CROP_MARGIN == pytest.approx(0.0135)
-    assert config.CROP_MARGIN == pytest.approx(0.0135)
+    assert config.DEFAULT_CROP_MARGIN == pytest.approx(0.0)
+    assert config.CROP_MARGIN == pytest.approx(0.0)
 
 
 def test_crop_margin_is_read_from_the_environment_at_startup(monkeypatch):
@@ -69,10 +72,10 @@ def test_invalid_crop_margin_env_falls_back_to_the_default(monkeypatch):
         config.reload_from_env()
 
 
-def test_tight_margin_crop_is_barely_larger_than_the_detector_box():
+def test_default_margin_crop_is_the_tight_detector_square():
     img = np.zeros((1000, 1000, 3), np.uint8)
     _, _, w, _ = preprocessing.compute_crop_box((400, 400, 200, 200), img.shape[:2])
-    assert w == pytest.approx(200 * (1 + 2 * 0.0135), abs=1)
+    assert w == pytest.approx(200 * (1 + 2 * config.DEFAULT_CROP_MARGIN), abs=1)
 
 
 def test_margin_zero_gives_the_tight_square():
@@ -136,9 +139,9 @@ def test_normalize_produces_rgb_channel_order():
 # --------------------------------------------------------------------------
 # faces flush against the frame edge
 #
-# At the measured margin (~0.0135) the square barely exceeds the detector box,
-# so any face near an edge lands on the clamp path -- far more often than it did
-# at 0.4. These tests pin the two properties that matter there: the crop stays
+# At the measured margin (0.0) the square is exactly the detector box, so any
+# face near an edge lands on the clamp path -- far more often than it did at
+# 0.4. These tests pin the two properties that matter there: the crop stays
 # square at the requested size, and the face keeps its apparent scale.
 # --------------------------------------------------------------------------
 
@@ -210,25 +213,43 @@ def test_edge_flush_face_survives_the_full_pipeline(name):
 def test_face_filling_the_whole_frame_is_padded_not_zoomed():
     """A 200x200 UTKFace-style image where the detection fills the frame.
 
-    The square (205 px at the measured margin) cannot fit, so the deficit is
-    edge-padded. The face must still end up at 200/205 of the crop -- padding to
-    the *available* region instead of the *requested* square would silently zoom
-    the face to fill 100% of it, which is a framing change the model would see.
+    The margin is explicit rather than the default so this keeps exercising the
+    pad path regardless of what the default becomes: at 0.1 the square is 240 px
+    and cannot fit, so the deficit is edge-padded. The face must still end up at
+    200/240 of the crop -- padding to the *available* region instead of the
+    *requested* square would silently zoom the face to fill 100% of it, which is
+    a framing change the model would see.
+    """
+    box = (0, 0, 200, 200)
+    img = scene_with_face(200, 200, box)
+    margin = 0.1
+
+    geom = preprocessing.compute_crop_geometry(box, img.shape[:2], margin=margin)
+    crop = preprocessing.crop_face(img, box, margin=margin)
+
+    assert geom.needs_padding
+    assert crop.shape[0] == crop.shape[1] == geom.side
+    assert geom.side == pytest.approx(round(200 * (1 + 2 * margin)), abs=1)
+    assert 200 / geom.side == pytest.approx(0.833, abs=0.01)
+
+    # Padding is symmetric, so the face stays centred.
+    assert abs(geom.pad_left - geom.pad_right) <= 1
+    assert abs(geom.pad_top - geom.pad_bottom) <= 1
+
+
+def test_default_margin_needs_no_padding_when_the_box_fills_the_frame():
+    """At the default 0.0 the square *is* the detector box, so it always fits.
+
+    Worth pinning: the whole reason the clamp/pad path got so much attention is
+    that it was constantly live at a wide margin. At 0.0 a box that exactly
+    fills the frame should take the plain path with no padding at all.
     """
     box = (0, 0, 200, 200)
     img = scene_with_face(200, 200, box)
 
     geom = preprocessing.compute_crop_geometry(box, img.shape[:2])
-    crop = preprocessing.crop_face(img, box)
-
-    assert geom.needs_padding
-    assert crop.shape[0] == crop.shape[1] == geom.side
-    assert geom.side == pytest.approx(round(200 * (1 + 2 * 0.0135)), abs=1)
-    assert 200 / geom.side == pytest.approx(0.976, abs=0.01)
-
-    # Padding is symmetric, so the face stays centred.
-    assert abs(geom.pad_left - geom.pad_right) <= 1
-    assert abs(geom.pad_top - geom.pad_bottom) <= 1
+    assert geom.side == 200
+    assert not geom.needs_padding
 
 
 def test_oversized_square_keeps_scale_at_a_wide_margin():

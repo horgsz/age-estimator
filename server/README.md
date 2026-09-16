@@ -129,16 +129,37 @@ cropped, and it is the easiest thing in the project to get silently wrong.
 5. Convert BGR→RGB, scale to `[0, 1]`, ImageNet-normalise, transpose to CHW.
 
 UTKFace aligned+cropped images are essentially the raw detector box, so
-`CROP_MARGIN` defaults to **0.0135**. That number is measured, not agreed:
-running YuNet over 300 random UTKFace images (300/300 detected) and solving
-`m = (200 / max(w_det, h_det) - 1) / 2` for UTKFace's own native framing gives a
-median of 0.0135, IQR [0.0012, 0.0268], p05 −0.0149. It was 0.4 before it was
-measured, which framed the face at ~31% of the crop area against ~94% in
-training.
+`CROP_MARGIN` defaults to **0.0**. That number is measured end to end, not
+agreed. Two independent sweeps over the 1,185-image test split — `ml/`'s, which
+re-frames ground-truth crops, and this server's, which runs real YuNet detection
+and then the crop below — both bottom out at 0.0:
 
-**Erring wide is the dangerous direction.** Training augments with
-`RandomResizedCrop(scale=(0.8, 1.0))`, which only ever crops *in*, so the model
-has seen framings tighter than UTKFace but never wider ones.
+| margin | `ml/` (re-framed) | server (detect → crop → model) |
+| -----: | ----------------: | -----------------------------: |
+| −0.050 | 5.548 | 5.590 |
+| −0.025 | 5.501 | 5.574 |
+| **0.000** | **5.495** | **5.477** |
+| 0.0135 | 5.547 | 5.551 |
+| 0.050 | 5.706 | 5.688 |
+| 0.100 | 5.949 | 5.880 |
+| 0.200 | 6.264 | 6.190 |
+| 0.400 | — | 8.442 |
+
+The curves agree within **0.07 years everywhere**, which is the load-bearing
+result: running a real detector instead of re-framing ground truth does not
+shift the framing, so an offline-measured constant transfers to the deployed
+path. An earlier value of 0.0135 came from measuring UTKFace's own framing
+geometrically (median of `m = (200 / max(w_det, h_det) - 1) / 2` over 300
+images); it costs 0.07 years, which is within noise but not an improvement.
+
+It was **0.4** before any of this was measured, which framed the face at ~31% of
+the crop area against ~94% in training and cost ~3 years of MAE while the
+offline eval still reported ~5.5 — a silent 1.5x degradation.
+
+**Erring wide is still the dangerous direction.** The curve is markedly
+asymmetric: tighter-than-training costs almost nothing (−0.05 is +0.11 years),
+wider degrades steeply. Anything in [−0.05, +0.05] is within ~0.11 years, which
+comfortably absorbs detector jitter.
 
 **If the training pipeline changes its crop geometry, this module must change
 with it** — otherwise inference feeds the model out-of-distribution crops and
@@ -176,7 +197,7 @@ All via environment variables, re-read at startup.
 | Variable                 | Default                      | Meaning |
 | ------------------------ | ---------------------------- | ------- |
 | `AGE_MODEL_PATH`         | `checkpoints/age_model.pt`   | Checkpoint to load; stub if absent |
-| `CROP_MARGIN`            | `0.0135`                     | Face crop margin (fraction of box side) |
+| `CROP_MARGIN`            | `0.0`                        | Face crop margin (fraction of box side) |
 | `INPUT_SIZE`             | `224`                        | Model input resolution |
 | `NUM_BINS`               | `101`                        | Age bins in the DEX head |
 | `MAX_UPLOAD_BYTES`       | `10485760`                   | Request body cap (10 MiB) |

@@ -77,8 +77,9 @@
           <p class="tuning__help">
             How much padding is added around the detected face box before the
             crop is sent to the model. It must match how the training images
-            were framed &mdash; measured at <code>0.0135</code> for UTKFace.
-            Leave blank to use the server default.
+            were framed &mdash; measured at <code>0.0</code> for UTKFace, i.e.
+            the raw detector box. Leave blank to use the server default.
+            Opening this panel also reveals the raw range and bbox per face.
           </p>
           <div class="controls">
             <label class="control">
