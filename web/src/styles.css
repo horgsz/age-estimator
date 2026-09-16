@@ -476,3 +476,25 @@ body {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* --- tail-bias caveats ---------------------------------------------------- */
+
+.face-box__caveat {
+  display: block;
+  margin-top: 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+.faces__caveat {
+  margin: 9px 0 0;
+  padding: 7px 9px;
+  border-left: 3px solid var(--warn);
+  border-radius: 0 4px 4px 0;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--warn) 70%, #ffffff);
+}

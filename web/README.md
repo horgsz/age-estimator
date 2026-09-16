@@ -61,6 +61,30 @@ Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
   single highest-risk number in the system: too wide and the model sees framings
   it never saw during training. See `server/README.md` for the measurement.
 
+* **Tail-bias caveats.** The model's error is not uniform across ages, so the UI
+  says so where it matters. See below.
+
+### Accuracy caveats at the age extremes
+
+The trained model is biased at both ends of the range: roughly **+5.6 years at
+ages 0–9** and **−9.4 years at 80+**. At 0–9 the MAE *equals* the bias, meaning
+the model essentially never under-predicts a child — infants read as about 6–11.
+
+When the point estimate falls under **12** or over **70**, `tailCaveat()` in
+`src/overlay.ts` adds a short warning to the box label (`⚠ reads high for
+children`) and a fuller explanation to the face card, which is also folded into
+the box's `aria-label`.
+
+The estimate itself is **not corrected**. Quietly subtracting the bias would
+bake a dataset artefact into the served answer and hide the model's real
+behaviour; a parent photographing a toddler and seeing "8" should be told that
+is the model's floor rather than a measurement.
+
+This matters more than the headline MAE suggests: the predicted distribution's
+standard deviation averages **12.6 years** on the test set, far wider than the
+5.7-year MAE implies. That is exactly why the range leads and the point estimate
+is secondary.
+
 ### UI states
 
 | State | What you see |
@@ -73,6 +97,7 @@ Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
 | Server error / unreachable | The server's `detail` message, or a "start the API" hint |
 | Invalid crop margin | The server rejects it with 422 and the message is surfaced |
 | Stub model | A banner from `GET /health` warning that the ages are fake |
+| Age at either extreme | A caveat under the estimate when the point estimate is < 12 or > 70 |
 
 ## Mirroring — the easy bug
 

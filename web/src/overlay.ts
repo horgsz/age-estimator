@@ -37,6 +37,51 @@ export function formatRange(face: FaceResult): string {
   return `${formatYears(face.low)}–${formatYears(face.high)}`;
 }
 
+/**
+ * Ages where the model is measurably biased, and the app should say so.
+ *
+ * Measured on the UTKFace test split: bias runs +5.6 yrs at ages 0–9 and
+ * −9.4 yrs at 80+. At 0–9 the MAE *equals* the bias, meaning the model never
+ * under-predicts a child — infants read as roughly 6–11. That is a floor, not
+ * a measurement, and someone photographing a toddler deserves to be told.
+ *
+ * We surface it rather than silently correcting it: a correction would bake a
+ * dataset artefact into the served answer and hide it from the user.
+ */
+const YOUNG_TAIL = 12;
+const OLD_TAIL = 70;
+
+export interface TailCaveat {
+  kind: 'young' | 'old';
+  short: string;
+  long: string;
+}
+
+export function tailCaveat(age: number): TailCaveat | null {
+  if (age < YOUNG_TAIL) {
+    return {
+      kind: 'young',
+      short: 'reads high for children',
+      long:
+        'Accuracy degrades at this end of the range. The model reads high for ' +
+        'children — it effectively never guesses below about 6, so infants and ' +
+        'toddlers come out far too old. Treat this as the model’s floor, not a ' +
+        'measurement.',
+    };
+  }
+  if (age > OLD_TAIL) {
+    return {
+      kind: 'old',
+      short: 'reads low for older faces',
+      long:
+        'Accuracy degrades at this end of the range. The model reads low for ' +
+        'older faces, by roughly 9 years past 80, so the true age is likely ' +
+        'higher than shown.',
+    };
+  }
+  return null;
+}
+
 /** Hue from red (uncertain) to green (confident). */
 function confidenceColor(confidence: number): string {
   const hue = Math.round(Math.max(0, Math.min(1, confidence)) * 120);
@@ -89,13 +134,23 @@ export function renderBoxes(
     bar.appendChild(fill);
 
     label.append(range, point, bar);
+
+    const caveat = tailCaveat(face.age);
+    if (caveat) {
+      const flag = document.createElement('span');
+      flag.className = `face-box__caveat face-box__caveat--${caveat.kind}`;
+      flag.textContent = `⚠ ${caveat.short}`;
+      label.append(flag);
+    }
+
     box.append(label);
 
     box.setAttribute(
       'aria-label',
       `Face ${index + 1}: estimated ${formatRange(face)} years, ` +
         `point estimate ${formatYears(face.age)}, ` +
-        `confidence ${Math.round(face.confidence * 100)} percent`,
+        `confidence ${Math.round(face.confidence * 100)} percent` +
+        (caveat ? `. ${caveat.long}` : ''),
     );
 
     overlay.appendChild(box);
@@ -136,6 +191,15 @@ export function renderFaceList(list: HTMLElement, faces: FaceResult[]): void {
     confidence.textContent = `Confidence ${Math.round(face.confidence * 100)}%`;
 
     item.append(heading, range, point, bar, confidence);
+
+    const caveat = tailCaveat(face.age);
+    if (caveat) {
+      const note = document.createElement('p');
+      note.className = `faces__caveat faces__caveat--${caveat.kind}`;
+      note.textContent = caveat.long;
+      item.append(note);
+    }
+
     list.appendChild(item);
   });
 }
