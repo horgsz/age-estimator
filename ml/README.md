@@ -229,6 +229,41 @@ The table above uses the soft-expectation decode for continuity with the
 original spec; decoding the same checkpoint with the median cuts the 0-9 MAE
 from 4.89 to 1.58 and overall MAE from 5.547 to 4.841.
 
+### Conditioning: error by *true* age vs by *predicted* age
+
+The per-decade table above bins by **true** age, which is the correct frame for
+evaluating a model. A UI cannot do that — it only knows the number it is about
+to display, so it must threshold on the **predicted** value. Those are different
+curves, and the server session measured the difference end to end:
+
+| shown | n | MAE | bias |
+| --- | --- | --- | --- |
+| 0-5 | 25 | 3.09 | +1.54 |
+| 5-10 | 103 | 3.98 | +3.55 |
+| 20-30 | 286 | 4.08 | +2.30 |
+| 40-50 | 121 | **7.60** | +2.83 |
+| 65-70 | 34 | **8.19** | -0.20 |
+| 75+ | 22 | 5.83 | -3.48 |
+
+It inverts the story. By true age, 80+ is the worst bin (MAE 10.80). By
+predicted age, outputs **under 12 are the most accurate region the model has**,
+and the worst band is **40-70**. The cause is the same mean-reversion described
+below: the model rarely commits to an extreme value, so when it does emit one it
+is usually right — while the middle of the range absorbs everything it is unsure
+about. A genuine 85-year-old is displayed as roughly 68.
+
+Two consequences worth carrying:
+
+- **`E[|err| | predicted]` is the curve to quote to a user**, and it is less
+  flattering in the middle than `E[|err| | true]`. Any user-facing error bar or
+  caveat threshold should be derived from it.
+- **It is decode-dependent.** The table above uses the soft-expectation decode.
+  Because that decode is the main source of the compression (next section), a
+  median decode widens the output range and shifts these bins — the 80+ bias
+  improves from -10.80 to -7.47, so predictions that were unreachable at the top
+  of the range become reachable. Recompute this table under whichever decode
+  ships rather than porting these numbers across.
+
 ### Decoding: the mean is the wrong statistic
 
 `decode_compare.py` collapses the 101-bin distribution to an age seven
