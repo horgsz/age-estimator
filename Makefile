@@ -4,6 +4,7 @@
 #   make dev     run the API and the web UI together
 #   make test    run the server test suite
 #   make build   type-check and bundle the web UI
+#   make eval    end-to-end MAE of the deployed inference path
 
 PYTHON      ?= python3
 VENV        ?= .venv
@@ -11,7 +12,7 @@ VENV_PY     := $(VENV)/bin/python
 API_HOST    ?= 127.0.0.1
 API_PORT    ?= 8000
 
-.PHONY: setup venv web-deps dev api web test build preview fmt-check clean
+.PHONY: setup venv web-deps dev api web test build preview eval fmt-check clean
 
 setup: venv web-deps
 
@@ -48,6 +49,19 @@ build: web-deps
 
 preview: build
 	cd web && npm run preview
+
+## End-to-end MAE of the deployed path (YuNet -> server crop -> model).
+##
+##   make eval                              # ml/splits/test.csv, active margin
+##   make eval EVAL_MARGINS="0 0.0135 0.1"  # sweep margins
+##   make eval EVAL_CSV=... EVAL_ARGS="--limit 500"
+EVAL_CSV     ?= ml/splits/test.csv
+EVAL_MARGINS ?=
+EVAL_ARGS    ?=
+
+eval: venv
+	$(VENV_PY) -m server.tools.eval_end_to_end --csv $(EVAL_CSV) \
+		$(if $(EVAL_MARGINS),--margins $(EVAL_MARGINS),) $(EVAL_ARGS)
 
 clean:
 	rm -rf web/dist web/node_modules

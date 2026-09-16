@@ -50,6 +50,16 @@ Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
   the range `low–high`, with the point estimate shown smaller underneath —
   a single figure would imply precision the model does not have. Confidence
   drives the box's colour (red → green), its opacity, and a small bar.
+* **Crop margin (advanced)** — a collapsible panel that overrides the server's
+  `CROP_MARGIN` for a single request, plus a **Re-analyse last frame** button
+  that re-sends *byte-identical* pixels at the new margin. A/B'ing margins is
+  only meaningful if the input does not change between runs, so re-capturing
+  from the webcam would defeat the point. The margin the server actually used is
+  read from the `X-Crop-Margin` response header and shown below the control.
+
+  The default is **0.0135**, measured from UTKFace's native framing. This is the
+  single highest-risk number in the system: too wide and the model sees framings
+  it never saw during training. See `server/README.md` for the measurement.
 
 ### UI states
 
@@ -61,6 +71,7 @@ Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
 | 1+ faces | Boxes + per-face cards |
 | 0 faces | `{"faces": []}` is a success: a hint about lighting/distance, not an error |
 | Server error / unreachable | The server's `detail` message, or a "start the API" hint |
+| Invalid crop margin | The server rejects it with 422 and the message is surfaced |
 | Stub model | A banner from `GET /health` warning that the ages are fake |
 
 ## Mirroring — the easy bug
