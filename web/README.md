@@ -46,10 +46,10 @@ Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
 * **Upload** the same way, via the file picker or drag-and-drop, so the app is
   fully testable without a camera. Large images are downscaled to a 1600 px
   longest side before upload.
-* **Results** are drawn as boxes over the analysed frame. The headline number is
-  the range `low–high`, with the point estimate shown smaller underneath —
-  a single figure would imply precision the model does not have. Confidence
-  drives the box's colour (red → green), its opacity, and a small bar.
+* **Results** are drawn as boxes over the analysed frame. The headline is the
+  point estimate, rounded to a whole year and labelled **Age Estimate** — a
+  decimal would imply a precision the model does not have. Confidence drives the
+  box's colour (red → green), its opacity, and a small bar.
 * **Crop margin (advanced)** — a collapsible panel that overrides the server's
   `CROP_MARGIN` for a single request, plus a **Re-analyse last frame** button
   that re-sends *byte-identical* pixels at the new margin. A/B'ing margins is
@@ -57,33 +57,62 @@ Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
   from the webcam would defeat the point. The margin the server actually used is
   read from the `X-Crop-Margin` response header and shown below the control.
 
-  The default is **0.0135**, measured from UTKFace's native framing. This is the
-  single highest-risk number in the system: too wide and the model sees framings
-  it never saw during training. See `server/README.md` for the measurement.
+  Opening the panel also reveals a per-face debug line with the raw `low–high`
+  range, the unrounded estimate, and the bbox. The API still returns all of it
+  on every request; the panel just decides whether the user sees it.
 
-* **Tail-bias caveats.** The model's error is not uniform across ages, so the UI
-  says so where it matters. See below.
+  The default is **0.0**, the joint minimum of two independent end-to-end
+  sweeps. This is the single highest-risk number in the system: too wide and the
+  model sees framings it never saw during training. See `server/README.md`.
 
-### Accuracy caveats at the age extremes
+* **Tail caveats.** The model's error is not uniform across ages, so the UI says
+  so where it matters. See below.
 
-The trained model is biased at both ends of the range: roughly **+5.6 years at
-ages 0–9** and **−9.4 years at 80+**. At 0–9 the MAE *equals* the bias, meaning
-the model essentially never under-predicts a child — infants read as about 6–11.
+### Caveats at the age extremes
 
-When the point estimate falls under **12** or over **70**, `tailCaveat()` in
-`src/overlay.ts` adds a short warning to the box label (`⚠ reads high for
-children`) and a fuller explanation to the face card, which is also folded into
-the box's `aria-label`.
+Thresholds and wording here are conditioned on the **predicted** age, because
+that is the only thing the UI knows. This matters: binned by *true* age the
+model looks catastrophic at the top (MAE 10.8 at 80+), but binned by what it
+actually displays the picture is quite different, because it rarely commits to
+an extreme number and is roughly right when it does.
 
-The estimate itself is **not corrected**. Quietly subtracting the bias would
-bake a dataset artefact into the served answer and hide the model's real
-behaviour; a parent photographing a toddler and seeing "8" should be told that
-is the model's floor rather than a measurement.
+Measured end to end over 1,184 UTKFace test images at the shipped margin:
 
-This matters more than the headline MAE suggests: the predicted distribution's
-standard deviation averages **12.6 years** on the test set, far wider than the
-5.7-year MAE implies. That is exactly why the range leads and the point estimate
-is secondary.
+| shown | n | MAE | bias |
+| ----: | -: | --: | ---: |
+| 0–5 | 25 | 3.09 | +1.54 |
+| 5–10 | 103 | 3.98 | +3.55 |
+| 10–12 | 23 | 4.63 | +3.49 |
+| 40–50 | 121 | 7.60 | +2.83 |
+| 65–70 | 34 | 8.19 | −0.20 |
+| 70–75 | 18 | 6.56 | −0.69 |
+| 75+ | 22 | 5.83 | −3.48 |
+
+So the honest caveats are about a systematic **offset**, not about precision
+collapsing — and the young end is in fact the *most* accurate region by MAE.
+
+* Shown **under 12** → runs ~3 years high, and the model never outputs below
+  about 3, so for an infant the number is a floor rather than a measurement.
+* Shown **over 65** → runs low, increasingly so with age. The model compresses
+  the top of its range: a face in its mid-eighties typically displays as ~70.
+  The threshold is 65 rather than 70 precisely because of that compression — at
+  70 the note would miss the very people it is for.
+
+`tailCaveat()` in `src/overlay.ts` adds a short flag to the box label and a
+fuller explanation to the face card, both folded into the box's `aria-label` so
+the warning is not purely visual.
+
+The estimate is **not corrected**. Quietly subtracting the bias would bake a
+dataset artefact into the served answer and hide the model's real behaviour.
+
+The worst band by MAE is actually **40–70** (7.0–8.2), not the extremes. It is
+deliberately not caveated — flagging most of the range would dilute the signal,
+and the confidence bar already varies there.
+
+For context on why a single number is shown at all: the predicted distribution's
+standard deviation averages **12.7 years** on the test set, far wider than the
+5.5-year MAE implies. The product decision is to lead with one number; the range
+remains in the API response and under the advanced panel.
 
 ### UI states
 
@@ -92,12 +121,12 @@ is secondary.
 | Camera off / permission denied | Overlay on the preview explaining why, with a retry button; upload still works |
 | Insecure origin | Explains that `getUserMedia` needs `localhost` or https |
 | Analysing | Busy status, controls disabled |
-| 1+ faces | Boxes + per-face cards |
+| 1+ faces | Boxes + per-face cards, each with a rounded "Age Estimate" |
 | 0 faces | `{"faces": []}` is a success: a hint about lighting/distance, not an error |
 | Server error / unreachable | The server's `detail` message, or a "start the API" hint |
 | Invalid crop margin | The server rejects it with 422 and the message is surfaced |
 | Stub model | A banner from `GET /health` warning that the ages are fake |
-| Age at either extreme | A caveat under the estimate when the point estimate is < 12 or > 70 |
+| Age at either extreme | A caveat under the estimate when the shown age is < 12 or > 65 |
 
 ## Mirroring — the easy bug
 

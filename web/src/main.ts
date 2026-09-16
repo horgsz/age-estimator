@@ -35,7 +35,17 @@ const ui = {
   cropMargin: el<HTMLInputElement>('crop-margin'),
   reanalyse: el<HTMLButtonElement>('reanalyse'),
   tuningNote: el<HTMLParagraphElement>('tuning-note'),
+  tuning: el<HTMLDetailsElement>('tuning'),
 };
+
+// Opening the advanced panel also reveals the per-face debug details (the
+// low–high range and the unrounded estimate). Keying this off a body class
+// rather than touching each card means it survives every re-render.
+function syncDebugDetails(): void {
+  document.body.classList.toggle('debug', ui.tuning.open);
+}
+ui.tuning.addEventListener('toggle', syncDebugDetails);
+syncDebugDetails();
 
 const camera = new Camera(ui.video);
 let busy = false;
@@ -88,6 +98,11 @@ function requestedMargin(): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+/** Render a margin unambiguously: 0 becomes "0.0", not a bare "0" before a full stop. */
+function formatMargin(value: number): string {
+  return Number.isInteger(value) ? value.toFixed(1) : String(value);
+}
+
 function showMarginNote(used: number | null): void {
   if (used === null) {
     ui.tuningNote.hidden = true;
@@ -96,8 +111,8 @@ function showMarginNote(used: number | null): void {
   ui.tuningNote.hidden = false;
   ui.tuningNote.textContent =
     requestedMargin() === null
-      ? `Server default margin: ${used}.`
-      : `Analysed with margin ${used}.`;
+      ? `Server default margin: ${formatMargin(used)}`
+      : `Analysed with margin ${formatMargin(used)}`;
 }
 
 function clearResult(): void {

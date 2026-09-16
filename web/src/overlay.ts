@@ -33,23 +33,59 @@ function formatYears(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
+/**
+ * The headline figure, rounded to a whole year.
+ *
+ * A decimal on a single number ("31.4") implies a precision the model does not
+ * have — the predicted distribution's standard deviation averages ~12.6 years.
+ * The full-precision value stays in the API response and is shown in the
+ * advanced panel.
+ */
+export function formatAge(age: number): string {
+  return String(Math.round(age));
+}
+
 export function formatRange(face: FaceResult): string {
   return `${formatYears(face.low)}–${formatYears(face.high)}`;
 }
 
 /**
- * Ages where the model is measurably biased, and the app should say so.
+ * Ages where the displayed number is systematically offset, and the app says so.
  *
- * Measured on the UTKFace test split: bias runs +5.6 yrs at ages 0–9 and
- * −9.4 yrs at 80+. At 0–9 the MAE *equals* the bias, meaning the model never
- * under-predicts a child — infants read as roughly 6–11. That is a floor, not
- * a measurement, and someone photographing a toddler deserves to be told.
+ * Thresholds and wording are conditioned on the *predicted* age, because that
+ * is the only thing the UI knows. That distinction matters: binned by true age
+ * the model looks catastrophic at the top (MAE 10.8 at 80+), but binned by what
+ * it actually displays the picture is different, because it rarely commits to
+ * an extreme number and is roughly right when it does.
  *
- * We surface it rather than silently correcting it: a correction would bake a
+ * Measured end to end over 1,184 UTKFace test images at the shipped margin:
+ *
+ *   shown    n     MAE    bias
+ *   0–5      25    3.09   +1.54
+ *   5–10    103    3.98   +3.55
+ *   10–12    23    4.63   +3.49
+ *   40–50   121    7.60   +2.83
+ *   65–70    34    8.19   −0.20
+ *   70–75    18    6.56   −0.69
+ *   75+      22    5.83   −3.48
+ *
+ * So the honest caveats are about a systematic *offset*, not about precision
+ * collapsing. A shown age under 12 runs about 3 years high (and the model never
+ * outputs below ~3, so it has a floor). A shown age over 65 runs low, and more
+ * so the higher it goes — the model compresses the top of the range, which is
+ * why a genuinely 85-year-old face typically displays around 70.
+ *
+ * We surface this rather than silently correcting it: a correction would bake a
  * dataset artefact into the served answer and hide it from the user.
+ *
+ * Note the worst band by MAE is actually 40–70 (7.0–8.2), not the extremes. It
+ * is deliberately not caveated — flagging most of the range would dilute the
+ * signal, and the confidence bar already varies there.
  */
 const YOUNG_TAIL = 12;
-const OLD_TAIL = 70;
+// 65 rather than 70: tail compression means an 85-year-old typically displays
+// around 70, so a threshold at 70 misses the very cases the note is for.
+const OLD_TAIL = 65;
 
 export interface TailCaveat {
   kind: 'young' | 'old';
@@ -61,22 +97,22 @@ export function tailCaveat(age: number): TailCaveat | null {
   if (age < YOUNG_TAIL) {
     return {
       kind: 'young',
-      short: 'reads high for children',
+      short: 'likely younger than shown',
       long:
-        'Accuracy degrades at this end of the range. The model reads high for ' +
-        'children — it effectively never guesses below about 6, so infants and ' +
-        'toddlers come out far too old. Treat this as the model’s floor, not a ' +
-        'measurement.',
+        'The model reads high for young faces — by about 3 years in this range, ' +
+        'and it never outputs an age below roughly 3. A child is probably ' +
+        'younger than this says, and for an infant the number is the model’s ' +
+        'floor rather than a measurement.',
     };
   }
   if (age > OLD_TAIL) {
     return {
       kind: 'old',
-      short: 'reads low for older faces',
+      short: 'likely older than shown',
       long:
-        'Accuracy degrades at this end of the range. The model reads low for ' +
-        'older faces, by roughly 9 years past 80, so the true age is likely ' +
-        'higher than shown.',
+        'The model compresses the top of its range, so older faces read low and ' +
+        'increasingly so with age — a face in its mid-eighties typically shows ' +
+        'as about 70. The true age is likely higher than this says.',
     };
   }
   return null;
@@ -117,13 +153,13 @@ export function renderBoxes(
     if (y / imageHeight < 0.14) label.classList.add('face-box__label--below');
     label.style.borderColor = color;
 
-    const range = document.createElement('span');
-    range.className = 'face-box__range';
-    range.textContent = `${formatRange(face)} yrs`;
+    const age = document.createElement('span');
+    age.className = 'face-box__age';
+    age.textContent = formatAge(face.age);
 
-    const point = document.createElement('span');
-    point.className = 'face-box__point';
-    point.textContent = `≈ ${formatYears(face.age)}`;
+    const unit = document.createElement('span');
+    unit.className = 'face-box__unit';
+    unit.textContent = 'Age Estimate';
 
     const bar = document.createElement('span');
     bar.className = 'face-box__bar';
@@ -133,7 +169,13 @@ export function renderBoxes(
     fill.style.background = color;
     bar.appendChild(fill);
 
-    label.append(range, point, bar);
+    // Kept for tuning: the underlying range is still in the response, it is
+    // just not what the user leads with. Revealed with the advanced panel.
+    const detail = document.createElement('span');
+    detail.className = 'face-box__detail';
+    detail.textContent = `${formatRange(face)} yrs · ≈ ${formatYears(face.age)}`;
+
+    label.append(unit, age, bar, detail);
 
     const caveat = tailCaveat(face.age);
     if (caveat) {
@@ -147,8 +189,7 @@ export function renderBoxes(
 
     box.setAttribute(
       'aria-label',
-      `Face ${index + 1}: estimated ${formatRange(face)} years, ` +
-        `point estimate ${formatYears(face.age)}, ` +
+      `Face ${index + 1}: age estimate ${formatAge(face.age)} years, ` +
         `confidence ${Math.round(face.confidence * 100)} percent` +
         (caveat ? `. ${caveat.long}` : ''),
     );
@@ -170,13 +211,13 @@ export function renderFaceList(list: HTMLElement, faces: FaceResult[]): void {
     heading.className = 'faces__heading';
     heading.innerHTML = `<span class="faces__index">Face ${index + 1}</span>`;
 
-    const range = document.createElement('div');
-    range.className = 'faces__range';
-    range.textContent = `${formatRange(face)} years`;
+    const caption = document.createElement('div');
+    caption.className = 'faces__caption';
+    caption.textContent = 'Age Estimate';
 
-    const point = document.createElement('div');
-    point.className = 'faces__point';
-    point.textContent = `Point estimate ${formatYears(face.age)} · box ${face.bbox.join(', ')}`;
+    const age = document.createElement('div');
+    age.className = 'faces__age';
+    age.textContent = formatAge(face.age);
 
     const bar = document.createElement('div');
     bar.className = 'faces__bar';
@@ -190,7 +231,7 @@ export function renderFaceList(list: HTMLElement, faces: FaceResult[]): void {
     confidence.className = 'faces__confidence';
     confidence.textContent = `Confidence ${Math.round(face.confidence * 100)}%`;
 
-    item.append(heading, range, point, bar, confidence);
+    item.append(heading, caption, age, bar, confidence);
 
     const caveat = tailCaveat(face.age);
     if (caveat) {
@@ -199,6 +240,16 @@ export function renderFaceList(list: HTMLElement, faces: FaceResult[]): void {
       note.textContent = caveat.long;
       item.append(note);
     }
+
+    // The range and the unrounded value are still returned by the API; the
+    // advanced panel keeps them reachable for tuning without putting false
+    // precision in front of the user.
+    const detail = document.createElement('div');
+    detail.className = 'faces__detail';
+    detail.textContent =
+      `Range ${formatRange(face)} · point ${formatYears(face.age)} · ` +
+      `box ${face.bbox.join(', ')}`;
+    item.append(detail);
 
     list.appendChild(item);
   });
