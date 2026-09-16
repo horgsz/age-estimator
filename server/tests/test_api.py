@@ -178,3 +178,115 @@ def test_png_upload_is_accepted(client, face_bgr):
     resp = post_image(client, buf.tobytes(), filename="f.png", content_type="image/png")
     assert resp.status_code == 200
     assert len(resp.json()["faces"]) == 1
+
+
+# --------------------------------------------------------------------------
+# per-request crop margin
+#
+# The crop margin is the highest-risk number in the system, so it has to be
+# A/B-able against real webcam photos without a restart or a code edit.
+# --------------------------------------------------------------------------
+
+
+def post_with_margin(client, data, margin=None, where="query"):
+    files = {"image": ("frame.jpg", data, "image/jpeg")}
+    if margin is None:
+        return client.post("/estimate", files=files)
+    if where == "query":
+        return client.post("/estimate", files=files, params={"crop_margin": margin})
+    return client.post("/estimate", files=files, data={"crop_margin": str(margin)})
+
+
+def test_estimate_echoes_the_default_crop_margin(client, face_bytes):
+    resp = post_image(client, face_bytes)
+    assert resp.status_code == 200
+    assert float(resp.headers["X-Crop-Margin"]) == pytest.approx(config.CROP_MARGIN)
+    assert float(resp.headers["X-Crop-Margin"]) == pytest.approx(0.0135)
+
+
+@pytest.mark.parametrize("where", ["query", "form"])
+def test_crop_margin_override_is_echoed_and_applied(client, face_bytes, where):
+    default = post_image(client, face_bytes).json()["faces"][0]
+    wide = post_with_margin(client, face_bytes, 0.6, where=where)
+
+    assert wide.status_code == 200
+    assert float(wide.headers["X-Crop-Margin"]) == pytest.approx(0.6)
+
+    face = wide.json()["faces"][0]
+    # Same detection, so the bbox is unchanged...
+    assert face["bbox"] == default["bbox"]
+    # ...but a different crop reached the model, so the stub's crop-hash age moves.
+    assert face["age"] != default["age"]
+
+
+def test_crop_margin_override_is_deterministic(client, face_bytes):
+    first = post_with_margin(client, face_bytes, 0.25).json()["faces"][0]
+    second = post_with_margin(client, face_bytes, 0.25).json()["faces"][0]
+    assert first == second
+
+
+def test_form_crop_margin_beats_the_query_parameter(client, face_bytes):
+    resp = client.post(
+        "/estimate",
+        files={"image": ("frame.jpg", face_bytes, "image/jpeg")},
+        data={"crop_margin": "0.3"},
+        params={"crop_margin": 0.9},
+    )
+    assert resp.status_code == 200
+    assert float(resp.headers["X-Crop-Margin"]) == pytest.approx(0.3)
+
+
+def test_small_negative_crop_margin_is_allowed(client, face_bytes):
+    """The UTKFace measurement's p05 was negative; don't reject it."""
+    resp = post_with_margin(client, face_bytes, -0.05)
+    assert resp.status_code == 200
+    assert float(resp.headers["X-Crop-Margin"]) == pytest.approx(-0.05)
+    assert resp.json()["faces"]
+
+
+@pytest.mark.parametrize("margin", [-0.51, 2.01, 50.0, "abc"])
+@pytest.mark.parametrize("where", ["query", "form"])
+def test_out_of_range_crop_margin_is_rejected(client, face_bytes, margin, where):
+    resp = post_with_margin(client, face_bytes, margin, where=where)
+    assert resp.status_code == 422
+
+
+def test_crop_margin_override_does_not_change_the_response_body_shape(client, face_bytes):
+    body = post_with_margin(client, face_bytes, 0.2).json()
+    assert set(body) == {"faces"}
+    assert set(body["faces"][0]) == {"bbox", "age", "low", "high", "confidence"}
+
+
+def test_crop_margin_override_survives_a_no_face_image(make_client):
+    client = make_client(FakeDetector([]))
+    blank = encode_jpeg(np.full((240, 320, 3), 128, np.uint8))
+    resp = post_with_margin(client, blank, 0.8)
+    assert resp.status_code == 200
+    assert resp.json() == {"faces": []}
+    assert float(resp.headers["X-Crop-Margin"]) == pytest.approx(0.8)
+
+
+def test_server_default_margin_follows_the_environment(make_client, face_bytes, monkeypatch):
+    """`CROP_MARGIN=0.2 make api` changes the default with no code edit."""
+    monkeypatch.setenv("CROP_MARGIN", "0.2")
+    try:
+        config.reload_from_env()
+        client = make_client(FakeDetector([(40, 30, 120, 150)]))
+        resp = post_image(client, face_bytes)
+        assert float(resp.headers["X-Crop-Margin"]) == pytest.approx(0.2)
+    finally:
+        monkeypatch.delenv("CROP_MARGIN", raising=False)
+        config.reload_from_env()
+
+
+def test_crop_margin_header_is_exposed_to_cross_origin_callers(client, face_bytes):
+    """The Vite dev server is a different origin; without expose_headers the
+    browser can read the response body but not X-Crop-Margin."""
+    resp = client.post(
+        "/estimate",
+        files={"image": ("frame.jpg", face_bytes, "image/jpeg")},
+        headers={"Origin": config.CORS_ORIGINS[0]},
+    )
+    assert resp.status_code == 200
+    exposed = resp.headers.get("access-control-expose-headers", "")
+    assert "X-Crop-Margin" in exposed

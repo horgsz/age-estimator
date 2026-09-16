@@ -71,6 +71,28 @@
         </div>
 
         <ul id="face-list" class="faces"></ul>
+
+        <details id="tuning" class="tuning">
+          <summary class="tuning__summary">Crop margin (advanced)</summary>
+          <p class="tuning__help">
+            How much padding is added around the detected face box before the
+            crop is sent to the model. It must match how the training images
+            were framed &mdash; measured at <code>0.0135</code> for UTKFace.
+            Leave blank to use the server default.
+          </p>
+          <div class="controls">
+            <label class="control">
+              <span class="control__label">Margin</span>
+              <input id="crop-margin" class="control__input control__input--num"
+                     type="number" step="0.005" min="-0.5" max="2"
+                     placeholder="server default" />
+            </label>
+            <button id="reanalyse" class="btn" type="button" disabled>
+              Re-analyse last frame
+            </button>
+          </div>
+          <p id="tuning-note" class="tuning__note" hidden></p>
+        </details>
       </section>
     </main>
 

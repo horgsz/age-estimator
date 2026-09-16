@@ -32,10 +32,22 @@ const ui = {
   resultCanvas: el<HTMLCanvasElement>('result-canvas'),
   overlay: el<HTMLDivElement>('overlay'),
   faceList: el<HTMLUListElement>('face-list'),
+  cropMargin: el<HTMLInputElement>('crop-margin'),
+  reanalyse: el<HTMLButtonElement>('reanalyse'),
+  tuningNote: el<HTMLParagraphElement>('tuning-note'),
 };
 
 const camera = new Camera(ui.video);
 let busy = false;
+
+/**
+ * The exact pixels of the last analysed frame.
+ *
+ * Kept so the same frame can be re-sent at a different crop margin. A/B'ing
+ * margins is only meaningful if the input is byte-identical between runs —
+ * re-capturing from the webcam would change the pose and the lighting too.
+ */
+let lastCanvas: HTMLCanvasElement | null = null;
 
 // ---------------------------------------------------------------------------
 // status / UI states
@@ -63,7 +75,29 @@ function setBusy(value: boolean): void {
   ui.capture.disabled = value || !camera.isActive;
   ui.chooseFile.disabled = value;
   ui.deviceSelect.disabled = value || ui.deviceSelect.options.length < 2;
+  ui.cropMargin.disabled = value;
+  ui.reanalyse.disabled = value || lastCanvas === null;
   ui.dropzone.classList.toggle('dropzone--disabled', value);
+}
+
+/** The margin box, as a number — or null for "let the server decide". */
+function requestedMargin(): number | null {
+  const raw = ui.cropMargin.value.trim();
+  if (raw === '') return null;
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function showMarginNote(used: number | null): void {
+  if (used === null) {
+    ui.tuningNote.hidden = true;
+    return;
+  }
+  ui.tuningNote.hidden = false;
+  ui.tuningNote.textContent =
+    requestedMargin() === null
+      ? `Server default margin: ${used}.`
+      : `Analysed with margin ${used}.`;
 }
 
 function clearResult(): void {
@@ -106,6 +140,7 @@ function showResult(faces: FaceResult[], width: number, height: number): void {
  */
 async function analyseCanvas(canvas: HTMLCanvasElement): Promise<void> {
   if (busy) return;
+  lastCanvas = canvas;
   setBusy(true);
   clearResult();
   setStatus('busy', 'Analysing…');
@@ -114,8 +149,9 @@ async function analyseCanvas(canvas: HTMLCanvasElement): Promise<void> {
     const blob = await canvasToJpeg(canvas, JPEG_QUALITY);
     drawToCanvas(ui.resultCanvas, canvas, canvas.width, canvas.height);
 
-    const { faces } = await estimate(blob);
+    const { faces, cropMargin } = await estimate(blob, 'frame.jpg', requestedMargin());
     showResult(faces, canvas.width, canvas.height);
+    showMarginNote(cropMargin);
   } catch (err) {
     clearResult();
     if (err instanceof ApiError) {
@@ -260,6 +296,17 @@ ui.capture.addEventListener('click', () => {
 });
 
 ui.chooseFile.addEventListener('click', () => ui.fileInput.click());
+
+ui.reanalyse.addEventListener('click', () => {
+  if (lastCanvas) void analyseCanvas(lastCanvas);
+});
+
+ui.cropMargin.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && lastCanvas) {
+    event.preventDefault();
+    void analyseCanvas(lastCanvas);
+  }
+});
 
 ui.fileInput.addEventListener('change', () => {
   const file = ui.fileInput.files?.[0];

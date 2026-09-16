@@ -7,6 +7,12 @@ Endpoints
 
 ``bbox`` is in the ORIGINAL uploaded image's pixel coordinate space. An image
 with no detectable face returns ``{"faces": []}`` with HTTP 200.
+
+``POST /estimate`` accepts an optional ``crop_margin`` (query parameter or form
+field) that overrides :data:`server.config.CROP_MARGIN` for that request only,
+so crop margins can be A/B'd against real webcam photos without restarting. The
+margin actually used comes back in the ``X-Crop-Margin`` response header; the
+response body shape is unchanged.
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ from contextlib import asynccontextmanager
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -47,25 +53,39 @@ def set_predictor(predictor: AgePredictor | None) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Re-read settings from the environment *before* the predictor is built, so
+    # CROP_MARGIN and friends can be changed without touching code, and so a
+    # checkpoint's own normalisation values (applied during load) survive.
+    config.reload_from_env()
+
     predictor = get_predictor()
     log.info(
-        "Age estimator ready (model=%s, stub=%s, crop_margin=%.2f, input=%d)",
+        "Age estimator ready (model=%s, stub=%s) settings=%s",
         predictor.model_name,
         predictor.is_stub,
-        config.CROP_MARGIN,
-        config.INPUT_SIZE,
+        config.describe(),
     )
+    if predictor.is_stub:
+        log.warning("Serving FAKE ages from the stub predictor.")
     yield
 
 
 app = FastAPI(title="age-estimator", version="0.1.0", lifespan=lifespan)
 
+# CORS is the one setting bound at import rather than in `lifespan`, because
+# Starlette captures the origin list when the middleware is added. Under uvicorn
+# the module is imported after the process environment is set, so `CORS_ORIGINS`
+# still comes from the environment as expected.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
+    # Without this the browser silently hides X-Crop-Margin from fetch(): only
+    # CORS-safelisted response headers are readable cross-origin by default, and
+    # the Vite dev server is a different origin to the API.
+    expose_headers=["X-Crop-Margin"],
 )
 
 
@@ -94,7 +114,27 @@ async def health() -> dict:
 
 
 @app.post("/estimate")
-async def estimate(image: UploadFile = File(...)) -> dict:
+async def estimate(
+    response: Response,
+    image: UploadFile = File(...),
+    crop_margin: float | None = Query(
+        None,
+        ge=config.MIN_CROP_MARGIN,
+        le=config.MAX_CROP_MARGIN,
+        description=(
+            "Override the face crop margin for this request only. Defaults to "
+            "the server's CROP_MARGIN. Lets margins be A/B'd against real "
+            "webcam photos without a restart."
+        ),
+    ),
+    crop_margin_form: float | None = Form(
+        None,
+        alias="crop_margin",
+        ge=config.MIN_CROP_MARGIN,
+        le=config.MAX_CROP_MARGIN,
+        description="Same as the crop_margin query parameter, as a form field.",
+    ),
+) -> dict:
     content_type = (image.content_type or "").split(";")[0].strip().lower()
     if content_type not in config.ALLOWED_CONTENT_TYPES:
         raise HTTPException(
@@ -117,8 +157,18 @@ async def estimate(image: UploadFile = File(...)) -> dict:
     if frame is None:
         raise HTTPException(status_code=400, detail="Could not decode image")
 
+    # Form field wins over the query parameter; neither means "use the default".
+    margin = crop_margin_form if crop_margin_form is not None else crop_margin
+    effective_margin = config.CROP_MARGIN if margin is None else margin
+    # Echoed in a header rather than the body, so the pinned response shape is
+    # untouched but an A/B run can always prove which margin produced it.
+    response.headers["X-Crop-Margin"] = f"{effective_margin:.4f}"
+
     try:
-        faces = get_predictor().predict(frame)
+        predictor = get_predictor()
+        faces = predictor.predict_boxes(
+            frame, predictor.detector.detect(frame), effective_margin
+        )
     except Exception:
         log.exception("Prediction failed")
         raise HTTPException(status_code=500, detail="Prediction failed") from None

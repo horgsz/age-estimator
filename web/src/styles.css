@@ -432,3 +432,47 @@ body {
   font-size: 11.5px;
   color: var(--muted);
 }
+
+/* --- crop margin A/B panel ------------------------------------------------ */
+
+.tuning {
+  margin-top: 1rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.tuning__summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.tuning__summary:hover {
+  color: var(--fg, #e6edf3);
+}
+
+.tuning__help {
+  margin: 0.6rem 0 0.75rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.tuning__help code {
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.control__input--num {
+  width: 9rem;
+}
+
+.tuning__note {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}

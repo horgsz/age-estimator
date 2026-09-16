@@ -23,7 +23,23 @@ async function readErrorDetail(response: Response): Promise<string> {
     if (body && typeof body === 'object' && 'detail' in body) {
       const detail = (body as { detail: unknown }).detail;
       if (typeof detail === 'string') return detail;
-      if (Array.isArray(detail)) return 'The server rejected the upload.';
+      if (Array.isArray(detail)) {
+        // FastAPI validation errors: [{ loc: [...], msg: "..." }]. Naming the
+        // offending field matters most for crop_margin, which the user can type.
+        const parts = detail
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const { loc, msg } = item as { loc?: unknown; msg?: unknown };
+            if (typeof msg !== 'string') return null;
+            const field = Array.isArray(loc) ? loc[loc.length - 1] : undefined;
+            return typeof field === 'string' && field !== 'body'
+              ? `${field}: ${msg}`
+              : msg;
+          })
+          .filter((part): part is string => part !== null);
+        if (parts.length > 0) return parts.join('; ');
+        return 'The server rejected the upload.';
+      }
     }
   } catch {
     /* non-JSON error body */
@@ -54,10 +70,28 @@ export async function fetchHealth(): Promise<HealthResponse> {
   return (await response.json()) as HealthResponse;
 }
 
-/** POST an image to `/estimate`. Zero faces is a success, not an error. */
-export async function estimate(blob: Blob, filename = 'frame.jpg'): Promise<EstimateResponse> {
+/** Result of an `/estimate` call, plus the crop margin the server actually used. */
+export interface EstimateResult extends EstimateResponse {
+  /** Parsed from the `X-Crop-Margin` response header; null if absent. */
+  cropMargin: number | null;
+}
+
+/**
+ * POST an image to `/estimate`. Zero faces is a success, not an error.
+ *
+ * `cropMargin` overrides the server's CROP_MARGIN for this request only, so
+ * margins can be A/B'd against real webcam photos without a server restart.
+ */
+export async function estimate(
+  blob: Blob,
+  filename = 'frame.jpg',
+  cropMargin?: number | null,
+): Promise<EstimateResult> {
   const form = new FormData();
   form.append('image', blob, filename);
+  if (cropMargin != null && Number.isFinite(cropMargin)) {
+    form.append('crop_margin', String(cropMargin));
+  }
 
   const response = await request('/estimate', { method: 'POST', body: form });
   if (!response.ok) {
@@ -68,5 +102,8 @@ export async function estimate(blob: Blob, filename = 'frame.jpg'): Promise<Esti
   if (!Array.isArray(body?.faces)) {
     throw new ApiError('The server returned an unexpected response.');
   }
-  return body;
+
+  const header = response.headers.get('X-Crop-Margin');
+  const parsed = header === null ? Number.NaN : Number.parseFloat(header);
+  return { ...body, cropMargin: Number.isFinite(parsed) ? parsed : null };
 }
