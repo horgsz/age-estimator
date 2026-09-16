@@ -37,24 +37,42 @@ Ages outside 1..101 are dropped; 23,686 of 23,708 images survive.
 
 ### Label provenance — read before quoting the MAE
 
-UTKFace age labels are **dataset-provided annotations of unverified
-provenance**, not birth records. They are known to contain errors, and parts of
-the corpus were labelled with the help of automated age estimation rather than
-by documented ground truth. Three consequences worth stating plainly:
+UTKFace age labels are **not verified chronological ages**. From the official
+dataset page (susanqq.github.io/UTKFace):
 
-- There is an **irreducible label-noise floor** under every number in this
-  README. A ~4-5 year MAE is close enough to plausible annotation error that
-  some of the residual is the labels, not the model. Do not read further
-  improvement in this range as straightforwardly real.
-- Because some labels may descend from model estimates, a model trained here
-  can be partly fitting an **earlier estimator's biases**, which flatters
-  in-corpus evaluation.
+> "The ground truth of age, gender and race are estimated through the DEX
+> algorithm and double checked by a human annotator."
+
+So the labels are *model output with human review*, not birth records. Every
+metric in this README is therefore **agreement with DEX-plus-annotator, not
+error against true age**. Consequences worth stating plainly:
+
+- There is an **irreducible label-noise floor** under every number here. A ~4-5
+  year MAE is close enough to plausible annotation error that some of the
+  residual is the labels. Some apparent errors are very likely the model being
+  *right* about a mislabelled face. Do not read further improvement in this
+  range as straightforwardly real.
+- The model is partly **distilling an earlier estimator**, which flatters
+  in-corpus evaluation and caps what the score can mean.
 - Cross-dataset comparisons (and published UTKFace leaderboard numbers) are
   **not** comparable to these unless they use this exact split.
 
-The per-decade table is the honest view: the thin tails have both few samples
-*and* the least reliable labels, so treat 70+ figures as indicative only.
-Nothing here should be presented to an end user as a measured age.
+The thin tails have both the fewest samples *and* the least reliable labels, so
+treat the 70+ rows as indicative only. Nothing here should be presented to an
+end user as a measured age.
+
+#### The architectural irony
+
+DEX — *Deep EXpectation*, Rothe et al. — **is the 101-bin softmax-expectation
+method this model uses.** We built a DEX-style network and trained it on
+DEX-generated labels. We are substantially distilling DEX with a layer of human
+correction on top, which sets a real ceiling: the model is rewarded for
+reproducing DEX's behaviour, including DEX's own failure modes.
+
+That is not just a curiosity. It has a concrete, measurable consequence for the
+young-age bias — see [Decoding](#decoding-the-mean-is-the-wrong-statistic),
+where it turns out to explain the part of the bias that better decoding cannot
+remove.
 
 ## Train
 
@@ -167,6 +185,13 @@ robust to the same tail mass the median is.
 
 Test split (1,185 held-out images), `checkpoints/age_model.pt`:
 
+> **What these numbers measure.** UTKFace ages are DEX-algorithm estimates with
+> human review, not verified chronological ages, so every figure below is
+> *agreement with DEX-plus-annotator*, not error against true age. Part of the
+> residual is label noise, and some counted errors are likely correct
+> predictions on mislabelled faces. See
+> [Label provenance](#label-provenance--read-before-quoting-the-mae).
+
 | metric | value |
 | --- | --- |
 | MAE | **5.55 years** |
@@ -176,6 +201,9 @@ Test split (1,185 held-out images), `checkpoints/age_model.pt`:
 
 Per-decade breakdown — the interesting part, because UTKFace is heavily skewed
 toward ages 20-35:
+
+Same caveat applies per row, and more sharply: label reliability is worst
+exactly where support is thinnest.
 
 | decade | support | MAE | CS@5 | bias |
 | --- | --- | --- | --- | --- |
@@ -238,6 +266,49 @@ data-rich 30-60 band.
 This is a free win: it is a change of decode, not of weights. The artifact
 emits raw `logits`, so **the contract is unaffected** and the choice belongs to
 whatever consumes it.
+
+#### Is the young-age bias ours, or the labels'?
+
+Two explanations compete for the +4.82 year bias at ages 0-9. Either it is a
+**decoding artefact** (the mean of a 101-bin distribution is mean-reverting
+near the age-0 boundary), or it is **in the labels** and the model learned it
+faithfully — which DEX-generated labels would plausibly produce, since DEX
+exhibits exactly this mean-reversion. These have different fixes, and the
+decode comparison separates them: if the bias survives a decode that does *not*
+average over the support, it was never a decoding artefact.
+
+Bias by decade, expectation vs. mode (positive = predicts too old):
+
+| decade | n | expectation | mode | removed by mode |
+| --- | --- | --- | --- | --- |
+| 0-9 | 154 | +4.82 | **+0.60** | 88% |
+| 10-19 | 76 | +4.65 | +1.03 | 78% |
+| 20-29 | 368 | +4.57 | +1.29 | 72% |
+| 30-39 | 228 | +2.01 | -1.15 | — |
+| 60-69 | 65 | -3.27 | -2.89 | 12% |
+| 70-79 | 34 | -7.29 | -5.26 | 28% |
+| 80+ | 32 | -10.80 | -6.41 | 41% |
+
+**Verdict: at the young end it is overwhelmingly ours, and it is free to fix.**
+Mode removes 88% of the 0-9 bias (+4.82 → +0.60) and median removes 84%
+(→ +0.77). The two decodes are *not* biased high by a similar amount, which is
+the outcome that would have indicted the labels. The label-smoothing mechanism
+above independently predicts the magnitude (+4.5 at age 5 vs +4.82 measured),
+so both the discriminator and the mechanism agree.
+
+**But the residual is real, and the old end is a different story.** Mode leaves
++0.60 at 0-9 and still -6.41 at 80+, removing only 41% there. No decoding
+change touches that. The most likely explanation is the architectural irony
+above: if DEX-generated labels already carry DEX's mean-reversion, then our
+soft-expectation decode was applying a *second* layer of it on top. Switching
+decode strips our layer; the layer baked into the training targets is
+unreachable, because as far as the loss is concerned it is the truth.
+
+That is a limitation of the dataset, not of the model, and it cannot be
+resolved from inside UTKFace — measuring it requires labels of independent
+provenance (see Future work). Stated plainly: **the residual young-age bias is
+small and the large old-age bias is probably partly inherited, and this
+evaluation is structurally incapable of proving otherwise.**
 
 Training peaked at epoch 14/30 (val MAE 5.594) and then overfit. Best-val
 checkpointing keeps the epoch-14 weights. A regularized variant
@@ -359,6 +430,27 @@ forgiving one. Anything in [-0.05, +0.05] is within 0.21 years.
 
 Settling the constant properly would need real full-frame photographs with known
 tight crops; synthetic canvases cannot do it, and UTKFace cannot supply them.
+
+## Future work
+
+The single highest-value next step is to **validate against labels of
+independent provenance**. Everything in this README is measured against
+DEX-generated labels, so it cannot distinguish model error from label error —
+and the residual old-age bias in particular is un-diagnosable from inside
+UTKFace. Three corpora with documented real ages would settle it:
+
+| dataset | why |
+| --- | --- |
+| **FG-NET** | real ages from dated personal photographs; strong child/teen coverage, which is exactly where our residual bias sits |
+| **AgeDB** | manually collected and verified real ages, wide age range, good 70+ support where UTKFace is thinnest |
+| **APPA-REAL** | carries *both* real and apparent-age labels, so it can separate "wrong" from "looks that age" — the distinction our metric currently cannot make |
+
+Running the shipped checkpoint over these unchanged would give a true-error
+figure to sit beside the in-corpus 5.547, and the gap between them is the
+label-noise floor we can currently only assert. Also worth revisiting once
+that baseline exists: a class-balanced or age-weighted loss for the thin tails,
+which was not attempted here because in-corpus validation could not have told
+us whether it helped or merely fit the labels' bias more closely.
 
 ## Files
 
