@@ -11,6 +11,13 @@ Two things to know before reusing these numbers downstream:
   it displays. The two views disagree sharply at the tails -- under the median
   decode the 80+ bias is -7.81 by true age but +1.10 by displayed age. See
   "The tail bias does not survive re-conditioning" in ``ml/README.md``.
+
+  The general hazard, since this is where someone will be standing when they
+  are tempted: a product rule conditioned on a quantity the *model outputs* can
+  silently invert when the model changes, even though the evaluation below
+  stayed correct throughout. Both -7.81 and +1.10 were always right; the bug
+  would be wiring the wrong one to a UI threshold. Re-derive such thresholds
+  from predicted-age conditioning after any decode or weight change.
 * This script decodes with the soft expectation for continuity with the original
   spec. The shipped serving decode is the **median** (``AgeEstimator.median``),
   which scores better on every axis; see ``decode_compare.py``. So the figures

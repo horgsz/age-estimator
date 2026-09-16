@@ -190,6 +190,14 @@ years mean width and **75% coverage against 68% nominal**. One decode change
 fixes the point estimate and the interval together, because one mechanism was
 corrupting both.
 
+The general form of this, worth carrying to any binned-classification
+regressor: label smoothing corrupts **every moment** of the decoded
+distribution, not just the first. The mean was caught because it produced a
+visibly wrong number; the variance was wrong by a larger *relative* margin and
+went unnoticed for longer, because an uncertainty channel that degrades
+*toward* caution looks like appropriate humility. A too-wide confidence bar is
+the failure mode least likely to be reported by anyone using the system.
+
 ## Results
 
 Test split (1,185 held-out images), `checkpoints/age_model.pt`:
@@ -517,9 +525,17 @@ A sharper version of the same point, raised by the server session: because
 UTKFace labels are themselves softmax-expectation estimates, and expectation
 decoding is precisely what produced the compression we removed, **the in-corpus
 score may flatter a median decode differently than it flattered the mean**. The
-4.84 is agreement-with-DEX under a decode DEX did not use. That does not make
-the improvement unreal — it survived the detector path end to end — but it does
-mean the *size* of it is measured against a yardstick with a related bias.
+4.84 is agreement-with-DEX under a decode DEX did not use. Neither of us can
+say a priori whether that flatters or penalises median — only that the *size* of
+the improvement is measured against a yardstick carrying a related bias.
+
+One partial independent check does exist, though it is weaker than a real-age
+corpus. The server session's end-to-end 4.762 was obtained with **YuNet framing
+each crop**, not UTKFace's own crop geometry — so the result does not depend on
+the framing pipeline that generated the labels. That rules out the narrowest
+version of the worry (a pure label-generation-geometry artefact) while leaving
+the broader one (label *values* produced by expectation decoding) untouched.
+APPA-REAL remains the only thing that settles it.
 
 Running the shipped checkpoint over these unchanged would give a true-error
 figure to sit beside the in-corpus 5.547, and the gap between them is the
