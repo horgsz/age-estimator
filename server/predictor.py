@@ -166,6 +166,41 @@ class StubPredictor(AgePredictor):
         return np.asarray(ages, dtype=np.float32), np.asarray(stds, dtype=np.float32)
 
 
+_WRAPPER_PREFIXES = ("backbone.", "model.", "module.", "net.")
+
+
+def _strip_wrapper_prefix(state_dict: dict, model) -> dict:
+    """Unwrap a state dict saved from a module that *contains* the timm model.
+
+    The contract says the checkpoint holds a state dict for a bare timm
+    ``mobilenetv3_small_100``. In practice training code usually wraps it
+    (``self.backbone = timm.create_model(...)``, ``nn.DataParallel``, ...), which
+    prefixes every key. The tensors are identical, so refusing to load would be
+    pedantry — but silently loading the *wrong* tensors would be far worse, so
+    only strip a prefix if doing so actually makes the keys line up.
+    """
+    if not state_dict:
+        return state_dict
+
+    expected = set(model.state_dict())
+    if set(state_dict) & expected:
+        return state_dict
+
+    for prefix in _WRAPPER_PREFIXES:
+        if not all(key.startswith(prefix) for key in state_dict):
+            continue
+        stripped = {key[len(prefix) :]: value for key, value in state_dict.items()}
+        if set(stripped) >= expected:
+            log.warning(
+                "Checkpoint state dict keys are prefixed with %r (saved from a "
+                "wrapper module, not the bare timm model). Stripping the prefix.",
+                prefix,
+            )
+            return stripped
+
+    return state_dict
+
+
 class TorchPredictor(AgePredictor):
     """Real model: timm backbone + 101-way DEX head, soft-expectation decode."""
 
@@ -205,7 +240,7 @@ class TorchPredictor(AgePredictor):
         self.model = timm.create_model(
             self.model_name, pretrained=False, num_classes=self.num_bins
         )
-        self.model.load_state_dict(ckpt["state_dict"])
+        self.model.load_state_dict(_strip_wrapper_prefix(ckpt["state_dict"], self.model))
         self.model.eval()
 
         self._bins = torch.arange(self.num_bins, dtype=torch.float32)

@@ -103,6 +103,17 @@ confidence = 1 / (1 + std / 6)
 `meta["input_size"]` from the checkpoint, so normalisation can never drift from
 whatever training actually used.
 
+### Wrapper-prefixed state dicts
+
+The contract says `state_dict` belongs to a *bare* timm model. The checkpoint
+actually delivered prefixes every key with `backbone.`, because training wrapped
+the model (`self.backbone = timm.create_model(...)`). The tensors are identical,
+so the loader tolerates this: `_strip_wrapper_prefix` tries `backbone.`,
+`model.`, `module.` and `net.`, and strips one **only if** the raw keys do not
+already match and the stripped keys then cover every key the model expects.
+Anything looser could silently load unrelated tensors of a compatible shape,
+which is worse than refusing. A strip is logged at `WARNING`.
+
 ## Cropping — keep in sync with training
 
 `server/preprocessing.py` is the **single source of truth** for how a face is

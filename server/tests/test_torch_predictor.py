@@ -79,3 +79,40 @@ def test_load_predictor_falls_back_on_a_wrong_shaped_checkpoint(tmp_path):
     bad = tmp_path / "age_model.pt"
     torch.save({"weights": {}}, bad)
     assert isinstance(load_predictor(str(bad)), StubPredictor)
+
+
+def test_torch_predictor_accepts_a_wrapper_prefixed_state_dict(checkpoint, face_bgr, tmp_path):
+    """The delivered checkpoint prefixes every key with ``backbone.``.
+
+    Training wrapped the timm model (``self.backbone = timm.create_model(...)``)
+    so the saved keys do not match a bare timm model, even though the tensors
+    are identical. Loading must succeed rather than falling back to the stub.
+    """
+    ckpt = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
+    wrapped = tmp_path / "wrapped.pt"
+    torch.save(
+        {
+            "state_dict": {f"backbone.{k}": v for k, v in ckpt["state_dict"].items()},
+            "meta": ckpt["meta"],
+        },
+        wrapped,
+    )
+
+    predictor = TorchPredictor(str(wrapped), detector=FakeDetector([(148, 36, 97, 134)]))
+    assert predictor.is_stub is False
+
+    # Same weights under a different key spelling must give an identical answer.
+    plain = TorchPredictor(str(checkpoint), detector=FakeDetector([(148, 36, 97, 134)]))
+    assert predictor.predict(face_bgr)[0].age == pytest.approx(plain.predict(face_bgr)[0].age)
+
+
+def test_wrapper_prefix_is_not_stripped_when_keys_would_not_line_up(tmp_path):
+    """Only strip a prefix when it genuinely unwraps the model.
+
+    Stripping unconditionally could load unrelated tensors that happen to share
+    a shape, which is far worse than refusing — so a checkpoint whose stripped
+    keys still do not match must fall back to the stub, not load silently.
+    """
+    bad = tmp_path / "age_model.pt"
+    torch.save({"state_dict": {"backbone.not_a_real_layer.weight": torch.zeros(3)}}, bad)
+    assert isinstance(load_predictor(str(bad)), StubPredictor)
