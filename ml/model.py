@@ -91,6 +91,23 @@ class AgeEstimator(nn.Module):
         var = (probs * (centers.unsqueeze(0) - mean.unsqueeze(1)) ** 2).sum(dim=1)
         return mean, var.clamp_min(0).sqrt()
 
+    def median(self, logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return ``(median_age, iqr)`` for a batch of logits.
+
+        The soft-expectation decode averages over the whole 101-bin support, so
+        tail mass drags it toward the middle. Two things put tail mass there:
+        ``label_smoothing=0.1`` trains a uniform pedestal onto every bin (whose
+        own expectation is 50), and the predictive distribution is genuinely
+        right-skewed for young faces because mass cannot extend below bin 0.
+        The median is robust to both, and measurably so -- see ``ml/README.md``.
+        """
+        probs = F.softmax(logits.float(), dim=1)
+        cdf = probs.cumsum(dim=1)
+        med = (cdf < 0.5).sum(dim=1).to(probs.dtype)
+        q25 = (cdf < 0.25).sum(dim=1).to(probs.dtype)
+        q75 = (cdf < 0.75).sum(dim=1).to(probs.dtype)
+        return med, q75 - q25
+
     @torch.no_grad()
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Convenience inference helper returning ``(age, uncertainty)``."""
@@ -112,11 +129,31 @@ def build_meta(test_mae: float) -> dict[str, object]:
 def save_checkpoint(
     model: nn.Module, test_mae: float, path: Path = CHECKPOINT_PATH
 ) -> None:
+    """Write the artifact with a *bare timm* state dict.
+
+    ``AgeEstimator`` is a passthrough wrapper, so ``model.state_dict()`` would
+    prefix every key with ``backbone.``. ``meta`` advertises the backbone name
+    and bin count, so a consumer is entitled to do
+
+        timm.create_model(meta["backbone"], num_classes=meta["num_bins"])
+        model.load_state_dict(ckpt["state_dict"])
+
+    and that must work without key surgery. Strip the prefix on save so the
+    artifact matches the documented contract rather than our module layout.
+    """
+    inner = model.backbone if isinstance(model, AgeEstimator) else model
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
-        {"state_dict": model.state_dict(), "meta": build_meta(test_mae)},
+        {"state_dict": inner.state_dict(), "meta": build_meta(test_mae)},
         path,
     )
+
+
+def _strip_backbone_prefix(state: dict) -> dict:
+    """Accept both the bare and legacy ``backbone.``-prefixed layouts."""
+    if any(k.startswith("backbone.") for k in state):
+        return {k.removeprefix("backbone."): v for k, v in state.items()}
+    return state
 
 
 def load_checkpoint(
@@ -130,6 +167,6 @@ def load_checkpoint(
     model = AgeEstimator(
         backbone=meta["backbone"], num_bins=meta["num_bins"], pretrained=False
     )
-    model.load_state_dict(payload["state_dict"])
+    model.backbone.load_state_dict(_strip_backbone_prefix(payload["state_dict"]))
     model.eval()
     return model, meta

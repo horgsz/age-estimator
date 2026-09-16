@@ -35,6 +35,27 @@ This prints the age distribution and writes `ml/splits/{train,val,test}.csv`
 the split is reproducible and other components can reference the exact test set.
 Ages outside 1..101 are dropped; 23,686 of 23,708 images survive.
 
+### Label provenance — read before quoting the MAE
+
+UTKFace age labels are **dataset-provided annotations of unverified
+provenance**, not birth records. They are known to contain errors, and parts of
+the corpus were labelled with the help of automated age estimation rather than
+by documented ground truth. Three consequences worth stating plainly:
+
+- There is an **irreducible label-noise floor** under every number in this
+  README. A ~4-5 year MAE is close enough to plausible annotation error that
+  some of the residual is the labels, not the model. Do not read further
+  improvement in this range as straightforwardly real.
+- Because some labels may descend from model estimates, a model trained here
+  can be partly fitting an **earlier estimator's biases**, which flatters
+  in-corpus evaluation.
+- Cross-dataset comparisons (and published UTKFace leaderboard numbers) are
+  **not** comparable to these unless they use this exact split.
+
+The per-decade table is the honest view: the thin tails have both few samples
+*and* the least reliable labels, so treat 70+ figures as indicative only.
+Nothing here should be presented to an end user as a measured age.
+
 ## Train
 
 ```bash
@@ -84,7 +105,7 @@ Writes `checkpoints/age_model.onnx` and asserts parity with PyTorch within
 
 | key | contents |
 | --- | --- |
-| `state_dict` | model state dict |
+| `state_dict` | **bare `timm` state dict** — 244 tensors, no `backbone.` prefix |
 | `meta` | `{"backbone": "mobilenetv3_small_100", "num_bins": 101, "input_size": 224, "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225], "test_mae": <float>}` |
 
 `checkpoints/age_model.onnx` is opset 17 with a dynamic batch axis:
@@ -94,21 +115,53 @@ Writes `checkpoints/age_model.onnx` and asserts parity with PyTorch within
 | input | `input` | `[N, 3, 224, 224]` NCHW | float32 |
 | output | `logits` | `[N, 101]` | float32 |
 
-### Consuming the output
-
-The head is a classifier, not a scalar regressor. Preprocess with resize to 256,
-center crop 224, scale to `[0, 1]`, then ImageNet normalize with the `mean`/`std`
-from `meta`. Recover the age as the soft expectation over bin indices, and read
-the distribution's standard deviation as an uncertainty estimate:
+The `state_dict` loads directly into a bare `timm` model, with no key surgery:
 
 ```python
-probs = softmax(logits, axis=1)          # [N, 101]
-bins = np.arange(101)
-age = (probs * bins).sum(axis=1)
-sigma = np.sqrt((probs * (bins - age[:, None]) ** 2).sum(axis=1))
+ckpt = torch.load("checkpoints/age_model.pt", map_location="cpu")
+model = timm.create_model(ckpt["meta"]["backbone"],
+                          num_classes=ckpt["meta"]["num_bins"], pretrained=False)
+model.load_state_dict(ckpt["state_dict"])      # strict=True
 ```
 
-`AgeEstimator.predict()` in `ml/model.py` does exactly this for the PyTorch path.
+> Checkpoints written before 2026-09-16 prefixed every key with `backbone.`,
+> leaking this repo's wrapper module into the artifact and forcing consumers to
+> strip it. That is fixed at source in `save_checkpoint`; `load_checkpoint`
+> still accepts either layout. `ml/reports/artifact_manifest.json` records the
+> layout, content hashes, and provenance of the published files so a consumer
+> can detect a re-publish instead of discovering it through disagreeing numbers.
+
+### Consuming the output
+
+The head is a classifier, not a scalar regressor. Preprocess by resizing the
+square crop **directly to 224x224** (no separate centre crop -- a 256-resize
+plus 224-crop would silently discard 23% of the frame and put the input below
+the training augmentation's scale floor), scale to `[0, 1]`, then ImageNet
+normalize with the `mean`/`std` from `meta`.
+
+**Decode with the median, not the mean.** The obvious DEX decode is the soft
+expectation `sum_i p_i * i`, but it is badly mean-reverting here and the median
+of the same distribution is strictly better on every axis:
+
+| decode | MAE | CS@5 | bias | 0-9 MAE | 0-9 bias |
+| --- | --- | --- | --- | --- | --- |
+| soft expectation | 5.547 | 55.5% | +2.13 | 4.89 | +4.82 |
+| **median** | **4.841** | **68.4%** | **+0.35** | **1.58** | **+0.77** |
+| mode (argmax) | 5.237 | 65.8% | -0.17 | 1.55 | +0.60 |
+
+```python
+probs = softmax(logits, axis=1)                  # [N, 101]
+cdf = probs.cumsum(axis=1)
+age = (cdf < 0.5).sum(axis=1)                    # median bin
+iqr = (cdf < 0.75).sum(axis=1) - (cdf < 0.25).sum(axis=1)   # uncertainty
+```
+
+`AgeEstimator.median()` in `ml/model.py` does exactly this for the PyTorch path;
+`AgeEstimator.expectation()` retains the mean/std decode for comparison.
+
+Use the IQR rather than the standard deviation as the confidence signal when
+decoding with the median -- both describe the same distribution, but the IQR is
+robust to the same tail mass the median is.
 
 ## Results
 
@@ -143,6 +196,49 @@ young decades the bias is nearly equal to the MAE, meaning the model almost
 never under-predicts a child. Treat predictions below ~15 and above ~70 as
 weakly supported.
 
+**Most of that bias is a decoding artefact, not a learned one** -- see below.
+The table above uses the soft-expectation decode for continuity with the
+original spec; decoding the same checkpoint with the median cuts the 0-9 MAE
+from 4.89 to 1.58 and overall MAE from 5.547 to 4.841.
+
+### Decoding: the mean is the wrong statistic
+
+`decode_compare.py` collapses the 101-bin distribution to an age seven
+different ways on the *same* checkpoint -- no retraining:
+
+| decode | MAE | CS@5 | bias | 0-9 MAE | 0-9 bias | 80+ MAE |
+| --- | --- | --- | --- | --- | --- | --- |
+| soft expectation | 5.547 | 55.5% | +2.13 | 4.89 | +4.82 | 10.80 |
+| **median** | **4.841** | **68.4%** | +0.35 | 1.58 | +0.77 | 8.09 |
+| mode (argmax) | 5.237 | 65.8% | -0.17 | **1.55** | **+0.60** | **8.09** |
+| pedestal-corrected mean | 4.955 | 63.7% | +0.92 | 2.39 | +1.88 | 9.20 |
+
+The ranking reproduces on the val split (median 4.885 / 68.2%, expectation
+5.594 / 55.6%), so this is a real effect and not a decode chosen against the
+test set.
+
+Two things put mass in the tails of the predicted distribution, and the mean
+averages over all of it:
+
+1. **Label smoothing.** `label_smoothing=0.1` trains the model to place a
+   uniform pedestal of `0.1/101` on *every* bin. That pedestal's own
+   expectation is 50, so it pulls each prediction toward the middle by roughly
+   `E ~= 0.9 * age + 5`. At age 5 that predicts a +4.5 year bias; the measured
+   0-9 bias is +4.82. Subtracting the pedestal back out ("pedestal-corrected"
+   above) recovers most of the overall gap, which confirms the mechanism.
+2. **Boundary skew.** Probability mass cannot extend below bin 0, so for a
+   young face the distribution is genuinely right-skewed and the mean sits
+   above the peak regardless of smoothing.
+
+The median is robust to both, which is why it beats the pedestal correction
+despite being the cruder fix. The mode is marginally better still at the two
+extremes but throws away sub-bin resolution and loses 0.4 years in the
+data-rich 30-60 band.
+
+This is a free win: it is a change of decode, not of weights. The artifact
+emits raw `logits`, so **the contract is unaffected** and the choice belongs to
+whatever consumes it.
+
 Training peaked at epoch 14/30 (val MAE 5.594) and then overfit. Best-val
 checkpointing keeps the epoch-14 weights. A regularized variant
 (`--wd 0.05 --mixup 0.2`) was tried and was **worse** (val MAE 6.07): mixing two
@@ -157,8 +253,13 @@ detector's boxes scatter around the ideal framing, the model had near-zero
 headroom on the wide side. `RandomZoomOut` (`--zoom-out`, default `0.5`)
 reflect-pads the image and shrinks it back, simulating margins out to ~0.15.
 
-It is not merely free — it wins on the clean test set *and* flattens the
-wide-side cliff:
+**This augmentation was initially argued against, and that argument was wrong.**
+The reasoning — that `RandomResizedCrop` only crops inward, so widening its
+scale floor would trade away accuracy at the framing actually served — was
+correct about `RandomResizedCrop` but did not follow through to the conclusion
+that a *different* augmentation could add wide-side tolerance at no cost. The
+measurement reversed it: the augmentation is not merely free, it wins on the
+clean test set *and* flattens the wide-side cliff:
 
 | | baseline | + zoom-out |
 | --- | --- | --- |
@@ -202,11 +303,52 @@ crop tighter than UTKFace:
 | 0.05 | 5.896 | 5.706 |
 | 0.10 | 6.214 | 5.949 |
 | 0.15 | 7.386 | 6.134 |
-| 0.20 | — | 6.264 |
+| 0.20 | 9.01 | 6.264 |
+| 0.30 | 11.55 | 6.987 |
+| 0.40 | 13.60 | 8.637 |
+
+> The "baseline" column is the **pre-augmentation** model and is retained only
+> for comparison. Figures quoted elsewhere as 5.747 MAE, 52.2% CS@5, or the
+> 13.60 worst-case at margin 0.40 all refer to that superseded model. The
+> shipped artifact is the zoom-out model: **5.547 MAE, 55.5% CS@5, 8.637 at
+> margin 0.40**. Both columns use replicate padding for the wide rows.
 
 The curve is strongly **asymmetric**: cropping tighter than training costs
 essentially nothing over the whole range tested, while cropping wider degrades
 sharply. Erring wide is the dangerous direction.
+
+### How much of the wide-side penalty is a padding artefact?
+
+Wide framings have to invent surroundings that a UTKFace crop does not contain,
+and the choice of filler changes the answer a lot. `--pad-modes` brackets it:
+
+| CROP_MARGIN | replicate | texture | noise | gray |
+| --- | --- | --- | --- | --- |
+| 0.0135 | 5.547 | 5.547 | 5.547 | 5.547 |
+| 0.10 | 5.949 | 6.404 | 6.049 | 6.357 |
+| 0.15 | 6.134 | 7.043 | 6.131 | 6.818 |
+| 0.20 | 6.264 | 7.717 | 6.438 | 6.982 |
+| 0.30 | 6.987 | 9.192 | 8.462 | 8.228 |
+| 0.40 | 8.637 | 10.830 | 10.874 | 10.397 |
+
+**Replicate padding materially understates the penalty.** Against real
+photographic texture the cost at margin 0.15 is +1.50 years rather than +0.59,
+and at 0.30 it is +3.65 rather than +1.44. Replicate smears edge pixels outward,
+which is photometrically consistent with the face and unusually benign;
+`texture` composites onto upscaled patches of other UTKFace photos, which is
+real image statistics but introduces a hard seam that genuine wide framing would
+not have. **Truth is bracketed between the two**, so the earlier replicate-only
+table was the optimistic end of the range, and the practical safe band is
+narrower than the `[0.0, 0.10]` it implied — nearer `[0.0, 0.05]`.
+
+Note `noise` tracks `replicate` closely until 0.30: high-frequency noise is
+plainly non-face and appears to be largely ignored, whereas real texture is
+in-distribution for the backbone and can actively mislead it. That is the reason
+to trust `texture` as the pessimistic bound rather than `noise`.
+
+This does not change the recommendation — 0.0 is still right, and is now more
+clearly right, since the penalty for erring wide is larger than first measured.
+It does raise the value of the zoom-out augmentation correspondingly.
 
 **Recommendation: `CROP_MARGIN = 0.0`.** It is the empirical optimum for the
 shipped model, and it sits inside the flat region across the entire plausible

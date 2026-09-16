@@ -1,0 +1,38 @@
+{
+  "published_at": "2026-09-16T03:21:42+00:00",
+  "git_commit": "5d0fd63",
+  "note": "Strip backbone. prefix from state_dict to match the pinned contract. Weights bit-identical to the 5d0fd63 zoom-out model; test_mae unchanged at 5.5472 (soft-expectation decode).",
+  "checkpoint": {
+    "path": "checkpoints/age_model.pt",
+    "sha256": "56894c480044173e38092da08251766eab9965d0017bd9d1d8e3ce744ac41577",
+    "top_level_keys": [
+      "meta",
+      "state_dict"
+    ],
+    "num_tensors": 244,
+    "state_dict_layout": "bare_timm",
+    "loads_with": "timm.create_model(meta[\"backbone\"], num_classes=meta[\"num_bins\"]).load_state_dict(ckpt[\"state_dict\"])",
+    "meta": {
+      "backbone": "mobilenetv3_small_100",
+      "num_bins": 101,
+      "input_size": 224,
+      "mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "test_mae": 5.547156119447218
+    }
+  },
+  "onnx": {
+    "path": "checkpoints/age_model.onnx",
+    "sha256": "48b84e95822dfc455303f9dc1f609398501e5e1ee59d326425f938ba9f3bc35e"
+  },
+  "recommended_decode": "median",
+  "recommended_crop_margin": 0.0
+}
