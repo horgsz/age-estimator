@@ -24,11 +24,40 @@ run and are gitignored. To run the API and the web UI together, use
 ### `GET /health`
 
 ```json
-{ "status": "ok", "model": "stub", "stub": true }
+{ "status": "ok", "model": "stub", "stub": true, "checkpoint": null }
 ```
 
 `model` is the backbone name once a real checkpoint is loaded
 (e.g. `mobilenetv3_small_100`), or `"stub"` otherwise.
+
+`checkpoint` identifies **which artifact is actually live**. It is `null` for the
+stub; with real weights it reports the path, a short content hash, the file size
+and the MAE the trainer claimed:
+
+```json
+{
+  "status": "ok",
+  "model": "mobilenetv3_small_100",
+  "stub": false,
+  "checkpoint": {
+    "path": "/abs/path/checkpoints/age_model.pt",
+    "sha256": "56894c480044",
+    "bytes": 6606539,
+    "test_mae": 5.5472
+  }
+}
+```
+
+`sha256` is the first 12 hex chars of the digest of the file's bytes, so it is
+directly comparable with `shasum -a 256 <path> | cut -c1-12`.
+
+This exists because the checkpoint was twice republished to the same path
+mid-evaluation, silently invalidating measurements taken against it. `test_mae`
+alone is not sufficient to tell two artifacts apart — the second republish kept
+it byte-identical while changing the file — so compare the hash.
+
+`status`, `model` and `stub` are the pinned contract; `checkpoint` is additive
+and clients may ignore it.
 
 ### `POST /estimate`
 
@@ -112,7 +141,18 @@ so the loader tolerates this: `_strip_wrapper_prefix` tries `backbone.`,
 `model.`, `module.` and `net.`, and strips one **only if** the raw keys do not
 already match and the stripped keys then cover every key the model expects.
 Anything looser could silently load unrelated tensors of a compatible shape,
-which is worse than refusing. A strip is logged at `WARNING`.
+which is worse than refusing.
+
+A strip is logged as a loud multi-line `WARNING` banner reading
+`CHECKPOINT CONTRACT DEVIATION`, so that drift is visible in the startup log
+rather than silently absorbed.
+
+**Status:** the prefix was fixed at source — the current artifact ships bare
+timm keys and the banner no longer fires. The tolerance is retained anyway: it
+costs nothing, it is the correct robustness, and it failed *safe* (falling back
+to the stub) rather than crashing when it was needed. Do not remove it because
+"the checkpoint is fine now" — the artifact has already been republished to the
+same path three times.
 
 ## Cropping — keep in sync with training
 

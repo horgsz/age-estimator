@@ -116,3 +116,68 @@ def test_wrapper_prefix_is_not_stripped_when_keys_would_not_line_up(tmp_path):
     bad = tmp_path / "age_model.pt"
     torch.save({"state_dict": {"backbone.not_a_real_layer.weight": torch.zeros(3)}}, bad)
     assert isinstance(load_predictor(str(bad)), StubPredictor)
+
+
+def test_health_style_checkpoint_identity(checkpoint):
+    """The artifact must be identifiable at a glance.
+
+    It was republished to the same path mid-evaluation once, silently changing
+    the model under an in-flight comparison, so a content hash and the claimed
+    test MAE are surfaced rather than inferred from the numbers.
+    """
+    predictor = TorchPredictor(str(checkpoint), detector=FakeDetector([]))
+    info = predictor.describe_checkpoint()
+
+    assert info is not None
+    assert info["test_mae"] == pytest.approx(5.43)
+    assert len(info["sha256"]) == 12
+    assert info["bytes"] > 0
+    assert info["path"] == str(checkpoint)
+
+
+def test_checkpoint_digest_tracks_file_contents(checkpoint, tmp_path):
+    """Two different artifacts must not report the same identity."""
+    ckpt = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
+    other = tmp_path / "other.pt"
+    meta = dict(ckpt["meta"])
+    meta["test_mae"] = 5.55
+    torch.save({"state_dict": ckpt["state_dict"], "meta": meta}, other)
+
+    a = TorchPredictor(str(checkpoint), detector=FakeDetector([])).describe_checkpoint()
+    b = TorchPredictor(str(other), detector=FakeDetector([])).describe_checkpoint()
+
+    assert a["sha256"] != b["sha256"]
+    assert a["test_mae"] != b["test_mae"]
+
+
+def test_stub_reports_no_checkpoint():
+    assert StubPredictor().describe_checkpoint() is None
+
+
+def test_wrapper_prefix_strip_is_logged_loudly(checkpoint, tmp_path, caplog):
+    """A live contract deviation must be visible in the startup log."""
+    ckpt = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
+    wrapped = tmp_path / "wrapped.pt"
+    torch.save(
+        {
+            "state_dict": {f"backbone.{k}": v for k, v in ckpt["state_dict"].items()},
+            "meta": ckpt["meta"],
+        },
+        wrapped,
+    )
+
+    with caplog.at_level("WARNING", logger="server.predictor"):
+        TorchPredictor(str(wrapped), detector=FakeDetector([]))
+
+    warnings = "\n".join(r.getMessage() for r in caplog.records)
+    assert "CHECKPOINT CONTRACT DEVIATION" in warnings
+    assert "backbone." in warnings
+
+
+def test_no_deviation_warning_for_a_contract_shaped_checkpoint(checkpoint, caplog):
+    """The banner must not cry wolf when the checkpoint is correct."""
+    with caplog.at_level("WARNING", logger="server.predictor"):
+        TorchPredictor(str(checkpoint), detector=FakeDetector([]))
+
+    warnings = "\n".join(r.getMessage() for r in caplog.records)
+    assert "CONTRACT DEVIATION" not in warnings

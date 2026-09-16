@@ -23,7 +23,19 @@ def post_image(client, data: bytes, filename="frame.jpg", content_type="image/jp
 def test_health_reports_stub(make_client):
     client = make_client(FakeDetector([]))
     body = client.get("/health").json()
-    assert body == {"status": "ok", "model": "stub", "stub": True}
+    assert body == {"status": "ok", "model": "stub", "stub": True, "checkpoint": None}
+
+
+def test_health_keeps_the_pinned_contract_keys(make_client):
+    """`checkpoint` is additive; the three pinned keys must keep their meaning."""
+    client = make_client(FakeDetector([]))
+    body = client.get("/health").json()
+
+    assert body["status"] == "ok"
+    assert isinstance(body["model"], str)
+    assert isinstance(body["stub"], bool)
+    # Null for the stub: there is no artifact to identify.
+    assert body["checkpoint"] is None
 
 
 def test_estimate_with_stub_predictor(client, face_bytes):

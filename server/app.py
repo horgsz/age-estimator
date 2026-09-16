@@ -110,7 +110,16 @@ async def limit_upload_size(request: Request, call_next):
 @app.get("/health")
 async def health() -> dict:
     predictor = get_predictor()
-    return {"status": "ok", "model": predictor.model_name, "stub": predictor.is_stub}
+    # `status`, `model` and `stub` are the pinned contract; `checkpoint` is
+    # additive, and is null for the stub. It exists because the artifact was
+    # once republished to the same path with a different model inside it, which
+    # silently invalidated an in-flight evaluation.
+    return {
+        "status": "ok",
+        "model": predictor.model_name,
+        "stub": predictor.is_stub,
+        "checkpoint": predictor.describe_checkpoint(),
+    }
 
 
 @app.post("/estimate")

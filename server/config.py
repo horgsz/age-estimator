@@ -49,6 +49,17 @@ DEFAULT_MODEL_PATH = str(REPO_ROOT / "checkpoints" / "age_model.pt")
 # running real detection instead of re-framing ground-truth crops does not shift
 # the framing, so the constant measured offline transfers to the deployed path.
 #
+# Measured against the zoom-out-augmented checkpoint (meta.test_mae 5.5472). An
+# earlier checkpoint (5.7473) was far less framing-robust -- 13.60 at margin 0.4
+# against 8.44 here -- so the cliff is real but shallower than it first looked.
+# Re-measure with `make eval EVAL_MARGINS=...` if the checkpoint changes again.
+#
+# DO NOT "fix" this back to 0.0135. That value came from measuring UTKFace's own
+# framing geometrically -- the median of m = (200 / max(w_det, h_det) - 1) / 2
+# over 300 images -- which is a reasonable prior but is not the outcome-optimal
+# value. It costs 0.07 years end to end. The number above is chosen by measured
+# MAE, which is the thing we actually care about.
+#
 # It was 0.4 before any of this was measured, which framed the face at ~31% of
 # the crop area against ~94% in training and cost 3.0 years of MAE while the
 # offline eval still reported 5.5. Erring wide remains the dangerous direction;

@@ -99,6 +99,17 @@ class AgePredictor:
         self.model_path = model_path
         self._detector = detector
 
+    def describe_checkpoint(self) -> dict | None:
+        """Identify the loaded artifact, for ``GET /health`` and the harness.
+
+        The checkpoint was once republished to the same path mid-evaluation with
+        a different model inside it, which silently invalidated an in-flight
+        comparison. Surfacing a content hash and the checkpoint's own claimed
+        test MAE makes "which model is actually live?" answerable at a glance
+        instead of by inference from the numbers.
+        """
+        return None
+
     @property
     def detector(self) -> FaceDetector:
         if self._detector is None:
@@ -191,11 +202,21 @@ def _strip_wrapper_prefix(state_dict: dict, model) -> dict:
             continue
         stripped = {key[len(prefix) :]: value for key, value in state_dict.items()}
         if set(stripped) >= expected:
+            # Loud, not a quiet note: this is a live deviation from the pinned
+            # checkpoint contract. If ml/ ever fixes it at source this banner
+            # disappears, and if some *other* drift appears it is visible rather
+            # than silently absorbed.
+            log.warning("=" * 72)
             log.warning(
-                "Checkpoint state dict keys are prefixed with %r (saved from a "
-                "wrapper module, not the bare timm model). Stripping the prefix.",
+                "CHECKPOINT CONTRACT DEVIATION: state dict keys are prefixed %r.",
                 prefix,
             )
+            log.warning(
+                "The contract specifies a bare timm state dict; this one was saved "
+                "from a wrapper module."
+            )
+            log.warning("Stripping the prefix. The tensors are identical, so this is safe.")
+            log.warning("=" * 72)
             return stripped
 
     return state_dict
@@ -243,15 +264,29 @@ class TorchPredictor(AgePredictor):
         self.model.load_state_dict(_strip_wrapper_prefix(ckpt["state_dict"], self.model))
         self.model.eval()
 
+        self._digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+        self._size_bytes = path.stat().st_size
+
         self._bins = torch.arange(self.num_bins, dtype=torch.float32)
         log.info(
-            "Loaded age model %s (%d bins, input %d) from %s; reported test MAE: %s",
+            "Loaded age model %s (%d bins, input %d) from %s; "
+            "sha256:%s, reported test MAE: %s",
             self.model_name,
             self.num_bins,
             self.input_size,
             path,
+            self._digest,
             meta.get("test_mae", "n/a"),
         )
+
+    def describe_checkpoint(self) -> dict | None:
+        test_mae = self.meta.get("test_mae")
+        return {
+            "path": str(self.model_path),
+            "sha256": self._digest,
+            "bytes": self._size_bytes,
+            "test_mae": round(float(test_mae), 4) if test_mae is not None else None,
+        }
 
     def _estimate(self, batch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         torch = self._torch

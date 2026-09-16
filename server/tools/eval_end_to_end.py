@@ -278,6 +278,10 @@ class RunReport:
     stats: list["MarginStats"] = field(default_factory=list, repr=False)
     model: str = "unknown"
     stub: bool = True
+    # Which artifact produced these numbers. Recorded because the checkpoint was
+    # once republished to the same path mid-evaluation, making two runs silently
+    # incomparable.
+    checkpoint: dict | None = None
     seconds: float = 0.0
 
     @property
@@ -289,6 +293,7 @@ class RunReport:
         return {
             "model": self.model,
             "stub": self.stub,
+            "checkpoint": self.checkpoint,
             "total_samples": self.total,
             "read_errors": self.read_errors,
             "no_detection": self.no_detection,
@@ -312,7 +317,12 @@ def evaluate(
     """Run the full detect -> crop -> model path over ``samples``."""
     detector = detector or predictor.detector
     stats = {m: MarginStats(m) for m in margins}
-    report = RunReport(total=len(samples), model=predictor.model_name, stub=predictor.is_stub)
+    report = RunReport(
+        total=len(samples),
+        model=predictor.model_name,
+        stub=predictor.is_stub,
+        checkpoint=predictor.describe_checkpoint(),
+    )
     started = time.monotonic()
     saved = 0
 
@@ -372,6 +382,10 @@ def format_report(report: RunReport) -> str:
     add("End-to-end evaluation (YuNet detect -> server crop -> model)")
     add("=" * 78)
     add(f"model              : {report.model}{'  [STUB - ages are fake]' if report.stub else ''}")
+    if report.checkpoint:
+        ck = report.checkpoint
+        add(f"checkpoint         : sha256:{ck.get('sha256')}  claimed test MAE {ck.get('test_mae')}")
+        add(f"                     {ck.get('path')}")
     add(f"samples            : {report.total}")
     add(f"unreadable files   : {report.read_errors}")
     add(f"no face detected   : {report.no_detection}")
