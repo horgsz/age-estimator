@@ -31,7 +31,7 @@ def pick_device(requested: str) -> torch.device:
 
 
 def build_loaders(
-    batch_size: int, workers: int, limit: int | None, seed: int
+    batch_size: int, workers: int, limit: int | None, seed: int, zoom_out: float = 0.0
 ) -> tuple[DataLoader, DataLoader]:
     train_df = load_split("train")
     val_df = load_split("val")
@@ -44,7 +44,7 @@ def build_loaders(
         ).reset_index(drop=True)
 
     train_loader = DataLoader(
-        UTKFaceDataset(train_df, train=True),
+        UTKFaceDataset(train_df, train=True, zoom_out_prob=zoom_out),
         batch_size=batch_size,
         shuffle=True,
         num_workers=workers,
@@ -133,7 +133,7 @@ def train(args: argparse.Namespace) -> float:
     print(f"Device: {device}")
 
     train_loader, val_loader = build_loaders(
-        args.batch_size, args.workers, args.limit, args.seed
+        args.batch_size, args.workers, args.limit, args.seed, args.zoom_out
     )
     print(
         f"Train batches: {len(train_loader)} | Val batches: {len(val_loader)} "
@@ -254,6 +254,13 @@ def main() -> None:
     parser.add_argument("--wd", type=float, default=1e-4)
     parser.add_argument("--label-smoothing", type=float, default=0.1)
     parser.add_argument("--clip-grad", type=float, default=5.0)
+    parser.add_argument(
+        "--zoom-out",
+        type=float,
+        default=0.5,
+        help="probability of simulating a wider crop; 0 disables. Gives the "
+        "model tolerance to loose YuNet boxes, which RandomResizedCrop cannot.",
+    )
     parser.add_argument(
         "--mixup",
         type=float,

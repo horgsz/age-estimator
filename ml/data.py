@@ -8,6 +8,7 @@ warning rather than aborting the run.
 from __future__ import annotations
 
 import argparse
+import random
 from collections import Counter
 from pathlib import Path
 
@@ -32,6 +33,9 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 
 STRATIFY_BIN_YEARS = 5
 MIN_STRATUM_SIZE = 20
+
+# Median implied YuNet margin over UTKFace; see ml/measure_crop_margin.py.
+NATIVE_MARGIN = 0.0135
 
 
 def parse_age(name: str) -> int | None:
@@ -156,12 +160,51 @@ def load_split(name: str, split_dir: Path = SPLIT_DIR) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def build_transforms(train: bool) -> transforms.Compose:
+class RandomZoomOut:
+    """Pad then resize back, simulating a looser crop than UTKFace framing.
+
+    ``RandomResizedCrop`` only ever crops *inward*, so it gives the model
+    tolerance to framings tighter than UTKFace and none at all to wider ones.
+    At inference the YuNet box scatters around the ideal framing in both
+    directions, so without this the model has near-zero headroom on the wide
+    side. Edge padding matches how ``margin_sweep.py`` simulates wide framings.
+    """
+
+    def __init__(
+        self,
+        p: float = 0.5,
+        max_margin: float = 0.15,
+        native_margin: float = NATIVE_MARGIN,
+    ) -> None:
+        self.p = p
+        self.max_margin = max_margin
+        self.native_margin = native_margin
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        if self.p <= 0 or random.random() >= self.p:
+            return image
+        margin = random.uniform(self.native_margin, self.max_margin)
+        ratio = (1.0 + 2.0 * margin) / (1.0 + 2.0 * self.native_margin)
+        width, height = image.size
+        pad_x = round(width * (ratio - 1.0) / 2.0)
+        pad_y = round(height * (ratio - 1.0) / 2.0)
+        if pad_x <= 0 and pad_y <= 0:
+            return image
+        padded = transforms.functional.pad(
+            image, [pad_x, pad_y, pad_x, pad_y], padding_mode="edge"
+        )
+        return padded.resize((width, height), Image.BILINEAR)
+
+
+def build_transforms(train: bool, zoom_out_prob: float = 0.0) -> transforms.Compose:
     normalize = transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
     if train:
         return transforms.Compose(
             [
                 transforms.RandomResizedCrop(INPUT_SIZE, scale=(0.8, 1.0)),
+                # Applied after the crop so the simulated wide framing is not
+                # partly cropped back out.
+                RandomZoomOut(p=zoom_out_prob),
                 transforms.RandomHorizontalFlip(),
                 transforms.RandomRotation(15),
                 transforms.ColorJitter(0.2, 0.2, 0.2, 0.05),
@@ -190,11 +233,12 @@ class UTKFaceDataset(Dataset):
         frame: pd.DataFrame,
         train: bool,
         repo_root: Path = REPO_ROOT,
+        zoom_out_prob: float = 0.0,
     ) -> None:
         self.paths = frame["path"].tolist()
         self.ages = frame["age"].astype(int).tolist()
         self.repo_root = repo_root
-        self.transform = build_transforms(train)
+        self.transform = build_transforms(train, zoom_out_prob=zoom_out_prob)
 
     def __len__(self) -> int:
         return len(self.paths)
