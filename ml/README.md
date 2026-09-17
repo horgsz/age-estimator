@@ -1095,10 +1095,20 @@ second duty is width, not calibration.
 consistent, derived from a property of the loss I had verified numerically — and
 it was constructed to explain a comparison that was never valid. A structural
 explanation for an artifact is harder to dislodge than a wrong number, because it
-*predicts* the artifact. The falsification conditions are what made it cheap to
+*predicts* the artifact: wrong numbers get contradicted by data, wrong mechanisms
+get corroborated by it. The falsification conditions are what made it cheap to
 retire; without them it would have been an unfalsifiable story that happened to
-fit. State the disconfirming evidence in advance, and check the baseline before
-explaining the delta.
+fit. **State the disconfirming evidence in advance, and check the baseline before
+explaining the delta** — that discipline matters more than any of the specific
+column recommendations above, and it is the one thing to carry into the σ sweep.
+
+A corollary about where numbers live. This figure existed only in prose — it had
+no home in code, so it had no declared scope, and the first consumer to use it
+supplied one. That is how a corpus-level property became a per-model regression.
+It now lives in the server's `INTERVAL_CALIBRATION` at module scope, served as a
+sibling of the per-model table rather than a field inside it, so its shape
+carries its scope. An unhoused number will acquire whatever scope its first
+reader assumes.
 
 ### What this does not show
 
