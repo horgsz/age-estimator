@@ -16,3 +16,7 @@ checkpoints/*
 node_modules/
 dist/
 .DS_Store
+
+# AgeDB annotation data must not be redistributed (see MODEL_LICENSING.md).
+# Regenerate locally with datasets/build_manifest.py.
+datasets/manifest.csv
