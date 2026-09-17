@@ -114,9 +114,20 @@ class AgeEstimator(nn.Module):
         return self.expectation(self(x))
 
 
-def build_meta(test_mae: float) -> dict[str, object]:
-    """Artifact-contract metadata block. Keep these keys and names stable."""
-    return {
+def build_meta(
+    test_mae: float,
+    decode: str | None = None,
+    extra: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Artifact-contract metadata block. Keep these keys and names stable.
+
+    ``decode`` names the decode that ``test_mae`` was measured under. It exists
+    because an artifact carrying a bare number is ambiguous: the same weights
+    score 6.39 under one decode and 9.13 under another, and a consumer reading
+    ``test_mae`` has no way to tell which it is holding. Omitted for the
+    original artifact, whose contract predates the key.
+    """
+    meta: dict[str, object] = {
         "backbone": BACKBONE,
         "num_bins": NUM_BINS,
         "input_size": INPUT_SIZE,
@@ -124,10 +135,19 @@ def build_meta(test_mae: float) -> dict[str, object]:
         "std": IMAGENET_STD,
         "test_mae": float(test_mae),
     }
+    if decode is not None:
+        meta["decode"] = decode
+    if extra:
+        meta.update(extra)
+    return meta
 
 
 def save_checkpoint(
-    model: nn.Module, test_mae: float, path: Path = CHECKPOINT_PATH
+    model: nn.Module,
+    test_mae: float,
+    path: Path = CHECKPOINT_PATH,
+    decode: str | None = None,
+    extra: dict[str, object] | None = None,
 ) -> None:
     """Write the artifact with a *bare timm* state dict.
 
@@ -143,10 +163,38 @@ def save_checkpoint(
     """
     inner = model.backbone if isinstance(model, AgeEstimator) else model
     path.parent.mkdir(parents=True, exist_ok=True)
+    _warn_if_clobbering(path)
     torch.save(
-        {"state_dict": inner.state_dict(), "meta": build_meta(test_mae)},
+        {
+            "state_dict": inner.state_dict(),
+            "meta": build_meta(test_mae, decode=decode, extra=extra),
+        },
         path,
     )
+
+
+# Paths whose contents are published artifacts that other sessions consume.
+# Writing one from a training run or a variant experiment is almost always a
+# mistake: it is how a published file silently acquires different weights.
+PUBLISHED_PATHS = {"age_model.pt", "age_model_realgt.pt"}
+
+
+def _warn_if_clobbering(path: Path) -> None:
+    """Refuse to let a training run overwrite a published artifact in place.
+
+    Learned the hard way: ``age_model_realgt.pt`` served as both a variant
+    output *and* the publish target, so re-using it as the publish target
+    destroyed the variant it had been holding. The weights were unrecoverable
+    without a retrain, and nothing complained at the time -- the file was still
+    a valid checkpoint, just not the one the reports referenced. Keep publish
+    paths and experiment paths disjoint; this guard enforces that.
+    """
+    if path.name in PUBLISHED_PATHS and path.exists():
+        raise RuntimeError(
+            f"{path.name} is a published artifact; refusing to overwrite it "
+            f"from a training run. Write the variant to a distinct name "
+            f"(e.g. {path.stem}_<variant>{path.suffix}) and publish explicitly."
+        )
 
 
 def _strip_backbone_prefix(state: dict) -> dict:

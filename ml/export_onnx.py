@@ -47,22 +47,37 @@ def export(checkpoint: Path, onnx_path: Path, opset: int = OPSET) -> dict[str, o
     return meta
 
 
-def _verification_batch(batch: int, size: int) -> torch.Tensor:
+def _verification_batch(batch: int, size: int, corpus: str = "utkface") -> torch.Tensor:
     """Real normalized test images; random noise drives BatchNorm out of range
     and produces logits in the thousands, which makes an absolute 1e-4 check
-    meaningless. Parity must hold on the distribution the model actually sees."""
+    meaningless. Parity must hold on the distribution the model actually sees.
+
+    ``corpus`` must match the corpus the checkpoint was trained on, for the same
+    reason: verifying a real-GT model on UTKFace crops is a weaker check than it
+    looks, because the activations are not the ones it will encounter."""
     try:
-        frame = load_split("test").head(batch)
-        dataset = UTKFaceDataset(frame, train=False)
+        if corpus == "realgt":
+            from realgt_data import RealGTDataset, load_manifest
+
+            frame = load_manifest()
+            frame = frame[frame["split"] == "test"].head(batch)
+            dataset = RealGTDataset(frame, train=False)
+        else:
+            frame = load_split("test").head(batch)
+            dataset = UTKFaceDataset(frame, train=False)
         return torch.stack([dataset[i][0] for i in range(len(dataset))])
-    except (FileNotFoundError, OSError) as exc:
+    except (FileNotFoundError, OSError, ImportError, AssertionError) as exc:
         print(f"Falling back to synthetic input ({type(exc).__name__}: {exc})")
         torch.manual_seed(0)
         return torch.randn(batch, 3, size, size) * 0.5
 
 
 def verify(
-    checkpoint: Path, onnx_path: Path, batch: int = 8, tol: float = TOLERANCE
+    checkpoint: Path,
+    onnx_path: Path,
+    batch: int = 8,
+    tol: float = TOLERANCE,
+    corpus: str = "utkface",
 ) -> float:
     model, meta = load_checkpoint(checkpoint)
     model.eval()
@@ -86,7 +101,7 @@ def verify(
     assert out_dims[1].dim_value == int(meta["num_bins"]), "logits must be [N, 101]"
     assert inputs[0].type.tensor_type.elem_type == onnx.TensorProto.FLOAT
 
-    sample = _verification_batch(batch, size)
+    sample = _verification_batch(batch, size, corpus)
     with torch.no_grad():
         torch_out = model(sample).numpy()
 
@@ -139,10 +154,14 @@ def main() -> None:
     parser.add_argument("--onnx", type=Path, default=ONNX_PATH)
     parser.add_argument("--opset", type=int, default=OPSET)
     parser.add_argument("--tolerance", type=float, default=TOLERANCE)
+    parser.add_argument(
+        "--corpus", choices=["utkface", "realgt"], default="utkface",
+        help="corpus to draw verification images from; match the checkpoint",
+    )
     args = parser.parse_args()
 
     meta = export(args.checkpoint, args.onnx, args.opset)
-    verify(args.checkpoint, args.onnx, tol=args.tolerance)
+    verify(args.checkpoint, args.onnx, tol=args.tolerance, corpus=args.corpus)
     print(f"\nArtifact meta: {meta}")
 
 

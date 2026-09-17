@@ -47,8 +47,8 @@ def git_commit() -> str | None:
         return None
 
 
-def build(note: str) -> dict:
-    payload = torch.load(CHECKPOINT_PATH, map_location="cpu", weights_only=False)
+def build(note: str, ckpt: Path = CHECKPOINT_PATH, onnx: Path = ONNX_PATH) -> dict:
+    payload = torch.load(ckpt, map_location="cpu", weights_only=False)
     state = payload["state_dict"]
     prefixed = sum(k.startswith("backbone.") for k in state)
     return {
@@ -56,8 +56,8 @@ def build(note: str) -> dict:
         "git_commit": git_commit(),
         "note": note,
         "checkpoint": {
-            "path": "checkpoints/age_model.pt",
-            "sha256": sha256(CHECKPOINT_PATH),
+            "path": f"checkpoints/{ckpt.name}",
+            "sha256": sha256(ckpt),
             "top_level_keys": sorted(payload.keys()),
             "num_tensors": len(state),
             "state_dict_layout": "bare_timm" if prefixed == 0 else "backbone_prefixed",
@@ -67,8 +67,8 @@ def build(note: str) -> dict:
             ),
             "meta": payload["meta"],
         },
-        "onnx": {"path": "checkpoints/age_model.onnx", "sha256": sha256(ONNX_PATH)},
-        "recommended_decode": "median",
+        "onnx": {"path": f"checkpoints/{onnx.name}", "sha256": sha256(onnx)},
+        "recommended_decode": payload["meta"].get("decode", "median"),
         "recommended_crop_margin": 0.0,
     }
 
@@ -76,13 +76,20 @@ def build(note: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Publish artifact manifest")
     parser.add_argument("--note", default="", help="what changed in this publish")
+    parser.add_argument("--checkpoint", type=Path, default=CHECKPOINT_PATH)
+    parser.add_argument("--onnx", type=Path, default=ONNX_PATH)
+    parser.add_argument(
+        "--out", type=Path, default=MANIFEST_PATH,
+        help="manifest path; use a distinct file per artifact so publishing one "
+             "never invalidates another's recorded hash",
+    )
     args = parser.parse_args()
 
-    manifest = build(args.note)
-    MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2) + "\n")
+    manifest = build(args.note, args.checkpoint, args.onnx)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps(manifest, indent=2))
-    print(f"\nWrote {MANIFEST_PATH}")
+    print(f"\nWrote {args.out}")
 
 
 if __name__ == "__main__":

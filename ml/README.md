@@ -149,6 +149,36 @@ model.load_state_dict(ckpt["state_dict"])      # strict=True
 > layout, content hashes, and provenance of the published files so a consumer
 > can detect a re-publish instead of discovering it through disagreeing numbers.
 
+### Second artifact: `age_model_realgt.pt`
+
+The real-ground-truth retrain publishes a **separate pair of files** and does not
+replace the originals:
+
+| file | corpus | labels | `meta.test_mae` | decode |
+|---|---|---|---:|---|
+| `age_model.pt` / `.onnx` | UTKFace | DEX-estimated (apparent) | 5.5472 | expectation-era; median recommended |
+| `age_model_realgt.pt` / `.onnx` | AgeDB+APPA-REAL+FG-NET | real chronological | 6.393 | `median` (recorded in `meta`) |
+
+**The two `test_mae` values are not comparable** — different corpora, different
+label semantics. 6.393 is not "worse than" 5.5472; they answer different
+questions. See the real-GT section for the like-for-like comparison.
+
+The new artifact adds one key to `meta`:
+
+```python
+meta["decode"]  # "median" -- the decode test_mae was measured under
+```
+
+This was added to the *new* artifact rather than retrofitted to the shipped one,
+so no existing consumer's schema changes. It exists because a bare `test_mae` is
+ambiguous: the same weights score 6.393 or 9.347 depending on a decision that was
+previously recorded nowhere in the file. `build_meta(..., decode=...)` is
+optional and omitted for the original artifact, whose contract predates it.
+
+Each artifact has its own manifest sidecar — `reports/artifact_manifest.json` and
+`reports/artifact_manifest_realgt.json` — so publishing one never invalidates the
+other's recorded hash.
+
 ### Consuming the output
 
 The head is a classifier, not a scalar regressor. Preprocess by resizing the
@@ -687,6 +717,222 @@ earlier discriminator, now with an independent corpus behind it.
 - **None of this is fixed by a decode change.** These are target and training
   distribution problems.
 
+## Real-ground-truth retrain — a third measurement regime
+
+> **Three regimes now exist in this document and they are not interchangeable.**
+> The [Results](#results) section is UTKFace test, DEX-estimated labels.
+> [External validation](#external-validation--measured-against-real-ages-not-dex-labels)
+> is real ages, model never trained on them. **This section** is a *different
+> model* trained on real ages and scored on a real-age test split. A number
+> lifted from one regime into another is wrong even when the arithmetic is
+> right. The artifacts are separate files for the same reason.
+
+### The corpus
+
+`datasets/manifest.csv`, built by a sibling session, filtered to
+`real_ground_truth == True`:
+
+| source | images | subjects | notes |
+|---|---:|---:|---|
+| AgeDB | 16,487 | 567 | manually verified, ~29 images/subject |
+| APPA-REAL | 7,591 | 7,591 | one image per subject |
+| FG-NET | 1,002 | 82 | longitudinal, ~12 images/subject |
+| **total** | **25,080** | **8,240** | larger than the 23,684 UTKFace corpus |
+
+20 rows have `face_detected == False` and no crop; dropped. Crops were produced
+at `CROP_MARGIN = 0.0`, matching serving. 70+ support is 2,206 (8.8%) against
+UTKFace's thin tail, and teens 10-19 are 2,050.
+
+**Splits are identity-aware and that is load-bearing, not hygiene.** AgeDB and
+FG-NET are longitudinal — the same person appears at many ages. A random split
+puts one photo of a person in train and another in test, so the model can score
+well by recognising the individual rather than reading the face. **Leakage
+presents as a *better* number, not as an error**, which is why
+`assert_no_subject_leakage()` in `realgt_data.py` is an assertion rather than a
+warning: a silent invariant that only ever makes results look good is one nobody
+investigates. Re-verified independently here — zero subject overlap across all
+three split pairs.
+
+**Provenance caveat:** AgeDB came from the HuggingFace mirror
+`marcelohaps/agedb`, not the official password-gated source. Labels were parsed
+from original filenames rather than the mirror's derived columns. Re-encoding
+cannot be ruled out and median source resolution is ~200px, so some images are
+upscaled to 224. See `datasets/README.md`.
+
+### The label-smoothing experiment, and a mechanism confirmed
+
+Earlier this pipeline found that a **median** decode beat soft-expectation by a
+wide margin (4.84 vs 5.55 MAE) on the shipped weights, and attributed it to the
+uniform pedestal that `label_smoothing=0.1` trains into every bin. That pedestal
+has expectation exactly 50, so the decoded mean is pulled toward it:
+`E ≈ 0.9·age + 5`.
+
+That was a mechanism inferred from one model. The retrain made it **falsifiable**:
+if the pedestal is the cause, removing it should shrink the expectation-vs-median
+gap, and if the gap survives the mechanism was wrong.
+
+| variant | smoothing | E−median MAE gap (test) | (val) | decode that wins |
+|---|---|---:|---:|---|
+| shipped (UTKFace) | 0.1 | +0.220 | — | median |
+| realgt CE | 0.1 | +0.297 | +0.327 | median |
+| realgt CE | **0.0** | **−0.122** | **−0.129** | **expectation** |
+| realgt DLDL (Gaussian σ=2.5) | — | −0.003 | −0.016 | tie |
+
+**The sign flips.** And the expectation-decode bias tracks the pedestal
+monotonically, which is the quantitative form of the same claim:
+
+| variant | expectation bias |
+|---|---:|
+| shipped (ls=0.1, UTKFace) | +3.835 |
+| realgt CE (ls=0.1) | +1.400 |
+| realgt CE (ls=0.0) | −0.379 |
+| realgt DLDL | **+0.002** |
+
+**The median decode was compensating for the loss function, not for the task.**
+It was the right call to ship — it recovered real accuracy from weights we
+already had — but it was a workaround for a training choice, and it is worth
+being clear about which of those two things a fix is.
+
+**DLDL** replaces the uniform pedestal with a Gaussian soft target (σ=2.5)
+centred on the true age. Uniform smoothing tells the model that 3 and 90 are
+equally plausible alternatives for a 5-year-old, which is absurd for an ordinal
+target; a Gaussian encodes that neighbouring ages are near-misses. The target is
+**renormalised after truncation at the support edges** — without that, ages near
+0 and 100 lose their out-of-range tail and get silently down-weighted, i.e.
+exactly the extremes this retrain exists to fix.
+
+### Which decode ships on the new artifact, and why it is *not* the old reason
+
+Under DLDL the two decodes tie on MAE (6.390 expectation vs 6.393 median — noise)
+but median is **+4.1pp on CS@5** (56.2% vs 52.1%), and that reproduces on val.
+So median ships again, on CS@5 grounds, *not* as a pedestal workaround.
+
+The generalisable warning: **a decode choice is a property of the trained
+distribution, not of the problem.** Carrying one across a retrain without
+re-measuring would have silently cost accuracy here. This is why
+`meta["decode"]` now exists on the new artifact — an artifact carrying a bare
+`test_mae` is ambiguous, since the same weights score 6.39 or 9.13 depending on
+a decision recorded nowhere in the file.
+
+### Like-for-like: old vs new
+
+**The 8.52 figure from external validation is not a valid baseline any more.**
+It was measured over all 7,534 detected APPA-REAL images, none of which the old
+model had seen. The new model trains on APPA-REAL's train split. Comparing the
+two would score a held-out model against a partially-seen one. Both models are
+therefore scored on the **test split only**, which is held out for both.
+
+Real-GT test split, n=3,818, 2,044 subjects, each model at its best decode:
+
+| model | decode | MAE | CS@5 | bias | slope |
+|---|---|---:|---:|---:|---:|
+| shipped (UTKFace/DEX) | median | 9.127 | 42.2% | +2.485 | 0.744 |
+| realgt CE ls=0.1 | median | 6.850 | 52.6% | +0.079 | 0.798 |
+| realgt CE ls=0.0 | expectation | 6.767 | 49.7% | −0.379 | 0.794 |
+| **realgt DLDL** | **median** | **6.393** | **56.2%** | **−0.171** | **0.808** |
+
+Per source, test split only, median decode:
+
+| source | n | shipped | realgt CE | DLDL |
+|---|---:|---:|---:|---:|
+| APPA-REAL | 1,978 | 9.317 | 6.882 | **6.404** |
+| AgeDB | 1,728 | 8.993 | 6.986 | **6.578** |
+| FG-NET | 112 | 7.839 | 4.205 | **3.330** |
+
+FG-NET's 3.33 (CS@5 85.7%) is the largest relative gain, but **n=112 — do not
+over-read it.** FG-NET is also 44% under-12, the region where every model here
+does best, so the sample is favourable as well as small.
+
+### Slope: the compression is better, and still real
+
+Regression slope of predicted on true age is more diagnostic than MAE for this
+failure mode, because a model can lower MAE simply by predicting the mean more
+often. The old model scored **0.817 against real age** and **0.935 against
+apparent age** — a well-calibrated predictor of how old a face *looks*, and a
+compressed predictor of how old someone *is*.
+
+Training on real ages moves the real-age slope **0.744 → 0.808** on this split.
+That is a real improvement and it is **not** a return to 1.0. Compression
+survives the removal of DEX labels entirely, so it was never purely a label
+artefact.
+
+### The two called-out bands
+
+Per-decade, test split, median decode:
+
+| band | n | shipped MAE | shipped bias | DLDL MAE | DLDL bias |
+|---|---:|---:|---:|---:|---:|
+| 0-9 | 245 | 5.19 | +4.73 | **3.80** | +3.13 |
+| **10-19** | 344 | 11.22 | +10.40 | **6.99** | **+6.07** |
+| 20-29 | 797 | 8.53 | +6.56 | 5.71 | +3.52 |
+| 30-39 | 826 | 9.00 | +3.81 | 5.28 | −0.07 |
+| 40-49 | 598 | 10.08 | +2.08 | 6.49 | −2.24 |
+| 50-59 | 421 | 8.05 | −0.82 | 7.67 | −2.71 |
+| 60-69 | 273 | 8.39 | −4.56 | 7.89 | −4.71 |
+| **70-79** | 195 | 11.58 | −9.19 | **8.96** | **−7.48** |
+| **80+** | 119 | 12.76 | −12.49 | **9.55** | **−8.69** |
+
+**Teens (10-19): improved substantially but still the worst bias in the table.**
+MAE 11.22 → 6.99, bias +10.40 → +6.07. External validation had found teens to be
+the genuine weak spot (old model bias +7.42 against a single human rater's 4.50),
+and training on real ages cut the bias by 42%. A +6 year bias on teenagers is
+still the largest signed error anywhere in the range, and it is in the direction
+that matters most for any age-gating use: **teenagers read as adults.**
+
+**70+: moved, which settles a question.** Bias −12.49 → −8.69 at 80+. The
+previous finding was that our elderly bias *matched a single human rater's* error
+on the same images, which left it ambiguous — irreducible perceptual difficulty,
+or learned from labels? **Training on real chronological ages moved it by 3.8
+years without changing the architecture, so part of it was demonstrably learned
+from the labels.** That part was never a property of faces.
+
+But the majority of it did not move. A −8.69 residual at 80+ after training on
+real ages, with 2,206 images of 70+ faces in the corpus, is not explained by
+label provenance or by data scarcity. The honest statement is that this
+experiment **partitioned** the elderly bias into a label-induced component (now
+removed) and a residual (not explained here) — it did not eliminate it, and it
+does not identify what the residual is.
+
+### A destroyed checkpoint, and what it cost
+
+Partway through publishing I wrote the chosen artifact to
+`checkpoints/age_model_realgt.pt` — which was **also** the path the CE variant
+had trained to. The CE weights were overwritten and unrecoverable. Nothing
+errored: the file was still a perfectly valid checkpoint, just no longer the one
+the reports referenced. It was caught only by hashing the state dicts and
+noticing two supposedly-different variants were byte-identical.
+
+The CE variant was retrained to a distinct path. It reproduced closely but not
+exactly (val MAE 6.911 vs the original 7.079 — MPS is not bit-deterministic
+across runs), so **every CE number in this section comes from the reproducible
+checkpoint, not the destroyed one.** The conclusions were unaffected: the decode
+sign flip and the bias ladder both reproduce. Had they not, there would have
+been no way to tell which run was the anomaly.
+
+`save_checkpoint()` now refuses to overwrite a path in `PUBLISHED_PATHS`.
+The general lesson is the one this repo keeps relearning in different costumes:
+**a path that is both an experiment output and a published artifact will
+eventually be written by the wrong one, and the failure is silent** because the
+file remains valid. The earlier version of this was republishing
+`age_model.pt` under a live consumer; this was the same mistake pointed at
+myself. Publish paths and experiment paths must be disjoint.
+
+### What this does not show
+
+- **Not a better product model, necessarily.** If the goal is to predict how old
+  someone *looks*, the shipped UTKFace model is better at that by construction.
+  This model is better at chronological age. Those are different products, and
+  the 5.55-vs-6.39 comparison people will reach for is between two different
+  questions on two different corpora.
+- **σ=2.5 was not tuned.** It was the midpoint of a suggested range and the first
+  value tried. The DLDL result may improve or may be partly luck.
+- **One seed per variant.** The CE-vs-DLDL gap (6.850 vs 6.393) is large enough
+  to be believable; the expectation-vs-median gaps near zero are within what a
+  seed change could plausibly move. The *sign flip* across smoothing levels
+  reproduces on val and is the robust claim, not any individual decimal.
+- **AgeDB dominates at 66% of the corpus**, so "real ground truth" here largely
+  means "AgeDB", with its mirror-provenance caveats.
+
 ## Future work
 
 **Done: APPA-REAL and FG-NET.** What was previously the top item here has been
@@ -756,6 +1002,8 @@ previously gated on it:
 | `decode_compare.py` | expectation vs mode vs median decode comparison |
 | `external_eval.py` | APPA-REAL / FG-NET evaluation against real ages (read-only) |
 | `external_analysis.py` | decomposes external error into model, perception and label terms |
-| `publish_manifest.py` | sha256 + provenance sidecar for the published artifact |
+| `publish_manifest.py` | sha256 + provenance sidecar (one per published artifact) |
+| `realgt_data.py` | real-GT corpus loader + the no-subject-leakage assertion |
+| `realgt_compare.py` | like-for-like old-vs-new on held-out splits, all decodes |
 | `splits/` | committed train/val/test CSVs |
 | `reports/` | metrics, training history, scatter plot, external validation |

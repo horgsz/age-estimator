@@ -1,0 +1,45 @@
+{
+  "published_at": "2026-09-17T03:01:13+00:00",
+  "git_commit": "62b9f17",
+  "note": "Real-ground-truth retrain (AgeDB+APPA-REAL+FG-NET, identity-aware splits, DLDL sigma=2.5). Parallel artifact; does NOT replace age_model.pt.",
+  "checkpoint": {
+    "path": "checkpoints/age_model_realgt.pt",
+    "sha256": "fb629f49987aa37dacf3759e1de9ac6cd6089392f6d6fae482e020c7458a0ee7",
+    "top_level_keys": [
+      "meta",
+      "state_dict"
+    ],
+    "num_tensors": 244,
+    "state_dict_layout": "bare_timm",
+    "loads_with": "timm.create_model(meta[\"backbone\"], num_classes=meta[\"num_bins\"]).load_state_dict(ckpt[\"state_dict\"])",
+    "meta": {
+      "backbone": "mobilenetv3_small_100",
+      "num_bins": 101,
+      "input_size": 224,
+      "mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "test_mae": 6.393,
+      "decode": "median",
+      "corpus": "real_ground_truth (AgeDB 16487 + APPA-REAL 7591 + FG-NET 1002)",
+      "test_split": "datasets/manifest.csv split==test, real_ground_truth==True, n=3818",
+      "loss": "DLDL Gaussian soft target, sigma=2.5 (no label smoothing)",
+      "crop_margin": 0.0,
+      "label_semantics": "real chronological age",
+      "note": "test_mae is NOT comparable to age_model.pt's 5.5472: different corpus and different label semantics (real age vs DEX-estimated apparent age). See ml/README.md external-validation and real-GT sections."
+    }
+  },
+  "onnx": {
+    "path": "checkpoints/age_model_realgt.onnx",
+    "sha256": "6816bd2ddc5bb93ac98fd4ce8a66c2c054a6df008fa97c240bd9e27c5b6ed246"
+  },
+  "recommended_decode": "median",
+  "recommended_crop_margin": 0.0
+}
