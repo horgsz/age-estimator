@@ -4,3 +4,4 @@ raw/
 crops/
 __pycache__/
 *.pyc
+models/

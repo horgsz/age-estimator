@@ -175,8 +175,17 @@ def process(
         if out_path.is_file() and not overwrite:
             crop_paths.append(out_path.relative_to(REPO_ROOT).as_posix())
             detected.append(True)
-            det_passes.append("cached")
-            stats[f"{source}:cached"] += 1
+            # Keep whichever pass originally produced this crop, if the manifest
+            # still remembers it; relabelling everything "cached" on a rerun
+            # would erase the primary/rescue breakdown the report depends on.
+            previous = getattr(record, "detect_pass", None)
+            pass_label = (
+                str(previous)
+                if isinstance(previous, str) and previous in {"primary", "rescue"}
+                else "cached"
+            )
+            det_passes.append(pass_label)
+            stats[f"{source}:{pass_label}"] += 1
             continue
 
         image = cv2.imread(str(src_path), cv2.IMREAD_COLOR)
@@ -269,16 +278,18 @@ def main() -> None:
     processed = process(manifest, args.crops_dir, args.margin, args.overwrite, args.limit)
 
     if args.sources or args.limit:
-        # Partial run: merge back into the full manifest rather than truncating it.
+        # Partial run: merge back into the full manifest rather than truncating
+        # it. New columns start as object dtype -- initialising with pd.NA gives
+        # float64, which then refuses the string crop paths.
         full = pd.read_csv(args.manifest)
+        indexed = processed.set_index("path")
         for column in ("crop_path", "face_detected", "detect_pass"):
             if column not in full.columns:
-                full[column] = pd.NA
-            full.loc[full["path"].isin(processed["path"]), column] = (
-                full.loc[full["path"].isin(processed["path"]), "path"]
-                .map(processed.set_index("path")[column])
-                .values
-            )
+                full[column] = pd.Series([pd.NA] * len(full), dtype=object)
+            else:
+                full[column] = full[column].astype(object)
+            updated = full["path"].map(indexed[column])
+            full[column] = updated.where(updated.notna(), full[column])
         processed = full
 
     processed.to_csv(args.manifest, index=False)

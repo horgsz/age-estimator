@@ -95,3 +95,21 @@ agedb      1731  13146  1610
 appa-real  1978   4113  1500
 fgnet       112    790   100
 utkface    1185  21315  1184
+
+=== Face detection ===
+
+           images  detected  failed  fail_pct
+source                                       
+agedb       16487     16467      20      0.12
+appa-real    7591      7591       0      0.00
+fgnet        1002      1002       0      0.00
+utkface     23684     23677       7      0.03
+
+Detection pass used:
+
+detect_pass  none  primary  rescue
+source                            
+agedb          20    16427      40
+appa-real       0     7557      34
+fgnet           0      998       4
+utkface         7    23672       5

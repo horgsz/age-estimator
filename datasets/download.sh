@@ -57,9 +57,17 @@ if [ ! -s "$LIST" ]; then
       done
 fi
 
-# Idempotent: re-running only fetches files that are missing or zero-length.
-# The URLs are percent-encoded in Python because 69 of the 16,488 filenames
-# contain a space ("16020_MorganFreeman _73_m.jpg"), which curl rejects raw.
+# Idempotent: re-running only fetches files that are missing or invalid.
+#
+# Two traps here, both found the hard way:
+#   * 69 of the 16,488 filenames contain a space ("16020_MorganFreeman _73_m.jpg"),
+#     which curl rejects raw, so URLs are percent-encoded in Python.
+#   * HuggingFace rate-limits by IP and answers with a 189-byte *200 OK* text
+#     body ("We had to rate limit your IP..."), not an HTTP error. A plain
+#     "file exists and is non-empty" check happily accepts those, and they only
+#     surface much later as unreadable images. Validity is therefore the JPEG
+#     magic number, and the fetch retries with backoff until it gets one.
+#     Do not relax this to a size check: the smallest genuine image is 38x37.
 PAIRS="$DL/agedb_pairs.tsv"
 RAW="$RAW" BASE="$BASE" LIST="$LIST" python3 - > "$PAIRS" <<'PY'
 import os, pathlib, urllib.parse
@@ -69,16 +77,25 @@ for line in open(os.environ["LIST"]):
     if not rel:
         continue
     out = pathlib.Path(raw) / "agedb" / rel[len("train/"):]
-    if out.exists() and out.stat().st_size > 0:
-        continue
+    try:
+        if out.open("rb").read(2) == b"\xff\xd8":
+            continue
+    except OSError:
+        pass
     print(f"{out}\t{base}/{urllib.parse.quote(rel)}")
 PY
 
 if [ -s "$PAIRS" ]; then
   echo "  fetching $(wc -l < "$PAIRS" | tr -d ' ') file(s) ..."
-  xargs -P 16 -L1 sh -c '
+  # -P 4, not 16: higher concurrency is what trips the rate limiter.
+  xargs -P 4 -L1 sh -c '
     mkdir -p "$(dirname "$1")"
-    curl -fsSL --retry 2 --max-time 60 -o "$1" "$2" || echo "FAILED $1" >&2
+    for attempt in 1 2 3 4 5; do
+      curl -fsSL --retry 2 --max-time 60 -o "$1" "$2" \
+        && [ "$(head -c 2 "$1" | xxd -p)" = "ffd8" ] && exit 0
+      sleep $((attempt * 5))
+    done
+    echo "FAILED $1" >&2
   ' _ < "$PAIRS"
 fi
 
