@@ -302,11 +302,28 @@ computed about the *mean*, so pairing it with a median point estimate would be
 subtly inconsistent.
 
 **Interval coverage is 60.8% against a 68% nominal target** on the served model
-— the interval is slightly too narrow. This is a reversal: on the old model the
-same construction measured 75% (too wide, i.e. conservative), because that
-model's σ was inflated by the label-smoothing pedestal. The new model's
-distributions are genuinely sharper, and the quantiles are now mildly
-overconfident instead.
+— the interval is slightly too narrow.
+
+An earlier revision of this file called that a *regression*, comparing it to 75%
+on the previous model. That comparison was invalid: the 75% was measured on the
+UTKFace split and the 60.8% on the real-ground-truth split. Two variables moved
+at once. Running the old checkpoint through this same harness on the *same*
+real-GT split (n=3,807) isolates them:
+
+| model | MAE | coverage | mean width | sd of width | r(width, \|error\|) |
+|---|---:|---:|---:|---:|---:|
+| shipped (UTKFace/DEX) | 9.110 | 61.7% | 20.61 | 12.92 | +0.309 |
+| realgt (DLDL σ=2.5) | 6.343 | **60.8%** | **11.62** | 4.22 | **+0.364** |
+
+**The coverage difference between the two models is 0.9pp.** The undercoverage
+is a property of this construction on this corpus, present in both models
+equally — not something the new model introduced. The drop from 75% was the
+corpus, not the weights.
+
+What the new model *did* change is width: the same coverage is achieved with an
+interval **44% narrower**, and width remains slightly more correlated with
+absolute error than before. Narrower at equal coverage is an improvement, not a
+regression.
 
 It is deliberately **not** retuned. Widening the quantiles until coverage hit
 68% on the test split would be fitting to the evaluation set. It is documented

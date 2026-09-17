@@ -199,12 +199,26 @@ measured limitation inside a number that looks authoritative.
 #### Interval calibration — known and slightly optimistic
 
 The `low`–`high` interval is the 16th/84th percentile of the predicted
-distribution, so it is **nominally 68%**. Measured coverage on this model is
-**60.8%** — the interval is slightly too narrow.
+distribution, so it is **nominally 68%**. Measured coverage is **60.8%** — the
+interval is slightly too narrow.
 
-This is a change of direction worth knowing: on the previous model the same
-construction measured 75% (too *wide*, i.e. conservative). It is now mildly
-overconfident instead.
+This was previously written up as a *reversal* from 75% on the old model. That
+was wrong, and the error was ours: the 75% came from the UTKFace split and the
+60.8% from the real-ground-truth split, so the comparison changed corpus and
+weights together. Re-running the old checkpoint on the same real-GT split
+(n=3,807, same harness, same crop) gives **61.7%** — a 0.9pp difference from the
+current model.
+
+So the undercoverage is not new and not caused by the new training objective. It
+is how this quantile construction behaves on this corpus, for both models. The
+nominal "68%" label is the part that does not hold; it is off by roughly 7pp
+regardless of which checkpoint is selected, which makes it the one derived
+number here that is *not* per-model.
+
+What did change is sharpness: the new model reaches the same coverage with an
+interval 44% narrower (mean width 20.6 → 11.6 years), and width stays slightly
+more predictive of absolute error (r +0.309 → +0.364). Equal coverage at half
+the width is a better interval, not a worse one.
 
 It has deliberately **not** been retuned. Widening the quantiles until coverage
 hit 68% on the test split would be fitting to the evaluation set — the exact
