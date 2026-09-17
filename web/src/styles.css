@@ -1,0 +1,568 @@
+:root {
+  --bg: #0e1116;
+  --panel: #161b22;
+  --panel-2: #1c232c;
+  --border: #2c333d;
+  --text: #e6edf3;
+  --muted: #9aa7b4;
+  --accent: #4f9cf9;
+  --ok: #3fb950;
+  --warn: #d29922;
+  --error: #f85149;
+  --radius: 10px;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 28px 20px 64px;
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 1fr;
+}
+
+.app__header {
+  grid-column: 1 / -1;
+}
+
+.app__header h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+  letter-spacing: -0.01em;
+}
+
+.app__sub {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--muted);
+}
+
+/* Deliberately not muted. This is the one claim on the page that has a
+   consequence if a user gets it wrong, so it must not read as fine print. */
+.app__warn {
+  margin: 10px 0 0;
+  max-width: 62ch;
+  padding: 9px 12px;
+  border-left: 3px solid var(--warn);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--warn) 72%, #ffffff);
+}
+
+@media (min-width: 900px) {
+  .app {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+}
+
+/* ------------------------------------------------------------------ banner */
+
+.banner {
+  margin-top: 14px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 13.5px;
+}
+
+.banner--hidden {
+  display: none;
+}
+
+.banner--ok {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+  color: var(--ok);
+}
+
+.banner--warn {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+  color: var(--warn);
+}
+
+.banner--error {
+  border-color: color-mix(in srgb, var(--error) 50%, var(--border));
+  color: var(--error);
+}
+
+/* ------------------------------------------------------------------- panel */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.panel__title {
+  margin: 0 0 12px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------- stage */
+
+.stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #05070a;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stage__media {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.stage--result {
+  aspect-ratio: auto;
+  min-height: 220px;
+}
+
+/*
+ * The result canvas must be laid out at its exact intrinsic aspect ratio
+ * (width: 100%, height: auto) so the stage box is the image box. If the canvas
+ * were ever letterboxed by `object-fit: contain`, the percentage-positioned
+ * overlay boxes would drift away from the faces.
+ */
+.stage--result .stage__media {
+  width: 100%;
+  height: auto;
+  object-fit: fill;
+}
+
+.stage--empty .stage__media {
+  display: none;
+}
+
+.stage--empty::after {
+  content: 'The analysed frame will appear here.';
+  color: var(--muted);
+  font-size: 13.5px;
+  padding: 40px 16px;
+  text-align: center;
+}
+
+.stage__message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  text-align: center;
+  background: rgba(5, 7, 10, 0.86);
+  backdrop-filter: blur(2px);
+}
+
+.stage__message p {
+  margin: 0;
+  max-width: 44ch;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+/* ---------------------------------------------------------------- controls */
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.control--grow {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.control--check {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.control__input {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.btn {
+  padding: 9px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06101d;
+}
+
+/* ---------------------------------------------------------------- dropzone */
+
+.dropzone {
+  margin-top: 12px;
+  padding: 18px;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+  color: var(--muted);
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropzone:hover,
+.dropzone:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.dropzone--over {
+  border-color: var(--accent);
+  background: rgba(79, 156, 249, 0.1);
+  color: var(--text);
+}
+
+.dropzone--disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ status */
+
+.status {
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.status--busy {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--accent);
+}
+
+.status--ok {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+  color: var(--ok);
+}
+
+.status--empty {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  color: var(--warn);
+}
+
+.status--error {
+  border-color: color-mix(in srgb, var(--error) 50%, var(--border));
+  color: var(--error);
+}
+
+/* --------------------------------------------------------------- face box */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/*
+ * Boxes are positioned in percentages of the analysed image, so they stay
+ * aligned at any CSS size. `object-fit: contain` on the canvas means the
+ * overlay only lines up when the stage matches the image's aspect ratio, which
+ * is why the result stage sizes itself to the canvas rather than a fixed ratio.
+ */
+.face-box {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+
+.face-box__label {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: -2px;
+  min-width: 108px;
+  padding: 5px 8px;
+  background: rgba(8, 11, 16, 0.92);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.face-box__label--below {
+  bottom: auto;
+  top: calc(100% + 5px);
+}
+
+.face-box__unit {
+  display: block;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.face-box__age {
+  display: block;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.face-box__detail {
+  display: none;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+body.debug .face-box__detail {
+  display: block;
+}
+
+.face-box__bar {
+  display: block;
+  height: 4px;
+  margin-top: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.face-box__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+
+/* ------------------------------------------------------------- face list */
+
+.faces {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.faces__item {
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+
+.faces__index {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.faces__caption {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.faces__age {
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+.faces__detail {
+  display: none;
+  margin-top: 8px;
+  font-size: 12px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--muted);
+}
+
+body.debug .faces__detail {
+  display: block;
+}
+
+.faces__bar {
+  height: 6px;
+  margin-top: 9px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.faces__bar-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+.faces__confidence {
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* --- crop margin A/B panel ------------------------------------------------ */
+
+.tuning {
+  margin-top: 1rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.tuning__summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.tuning__summary:hover {
+  color: var(--fg, #e6edf3);
+}
+
+.tuning__help {
+  margin: 0.6rem 0 0.75rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.tuning__help code {
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.control__input--num {
+  width: 9rem;
+}
+
+.tuning__note {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- tail-bias caveats ---------------------------------------------------- */
+
+.face-box__caveat {
+  display: block;
+  margin-top: 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+.faces__caveat {
+  margin: 9px 0 0;
+  padding: 7px 9px;
+  border-left: 3px solid var(--warn);
+  border-radius: 0 4px 4px 0;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--warn) 70%, #ffffff);
+}
+
+/* Model picker. Laid out as a plain radio group: the choice is between two
+   questions, not two quality levels, so it deliberately gets no "recommended"
+   styling that would imply one is better. */
+.control-group {
+  border: 1px solid var(--line, #d0d7de);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem 0.3rem;
+  margin: 0 0 1rem;
+}
+
+.control-group[hidden] {
+  display: none;
+}
+
+.control-group legend {
+  padding: 0 0.35rem;
+}
+
+.controls--models {
+  gap: 1.25rem;
+}
