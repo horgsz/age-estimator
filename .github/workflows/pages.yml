@@ -88,7 +88,13 @@ jobs:
         working-directory: web
         run: |
           set -euo pipefail
-          for f in dist/models/models.json \
+          # dist/ is committed verbatim by the branch-publish fallback below, so
+          # a stray .gitignore copied out of public/ would filter the whole
+          # deployment. It has done exactly that once.
+          test ! -e dist/.gitignore || { echo "dist/.gitignore must not exist" >&2; exit 1; }
+          for f in dist/index.html \
+                   dist/parity.html \
+                   dist/models/models.json \
                    dist/models/age_model_realgt.onnx \
                    dist/models/age_model.onnx \
                    dist/models/face_detection_yunet_2023mar.dynamic.onnx \

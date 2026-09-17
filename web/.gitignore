@@ -1,0 +1,24 @@
+# Staged build inputs -- see scripts/stage-assets.mjs.
+#
+# Everything under public/ is either copied from elsewhere in the repo
+# (../checkpoints/, node_modules/onnxruntime-web/dist/) or downloaded and
+# checksummed. Tracking a second copy of a 6.2 MB model is how the two get out
+# of sync, and the digest check in the staging script only helps if there is
+# one original.
+#
+# These rules live HERE and not in public/.gitignore for a reason that cost a
+# deploy: Vite copies public/ into dist/ verbatim, dotfiles included. A
+# .gitignore in public/ therefore lands in dist/ -- where it both gets served
+# as part of the site and, because the publish step commits dist/ to a branch,
+# silently filters the deployment down to the handful of files it happened to
+# whitelist. The symptom was a live site consisting of one JSON file.
+public/*
+!public/models/
+public/models/*
+
+# The exception. Generating models.json needs torch + onnxruntime, because it
+# verifies that each ONNX export really is the checkpoint its accuracy figures
+# were measured on. Making CI install a deep-learning stack to publish a static
+# site is not worth it, so the file is committed and a server test
+# (test_static_registry.py) fails if it has drifted from server/.
+!public/models/models.json
