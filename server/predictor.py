@@ -105,16 +105,26 @@ MEASURED_ACCURACY_BY_DIGEST = {
     # Its two figures differ by ~4 years and measure different things, which is
     # the whole reason this table exists.
     "56894c480044": {
-        "real_age_mae": 8.52,
-        "real_age_corpus": "APPA-REAL, n=7534",
+        # Measured end to end through this server on the SAME held-out split,
+        # with the same harness and crop, as the real-age model's 6.34. The two
+        # user-facing figures sit side by side under a toggle, so they have to
+        # be like-for-like or the comparison the UI invites is invalid. The ml/
+        # side independently gets 9.127 on this split.
+        "real_age_mae": 9.11,
+        "real_age_corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3807",
+        # Retained, but NOT the user-facing number: a different corpus. It is
+        # a valid measurement of these weights, just not comparable to 6.34.
+        "real_age_mae_appa_all": 8.52,
+        "real_age_corpus_appa_all": "APPA-REAL, n=7534",
         "in_corpus_mae_utkface": 4.762,
         "accuracy_note": (
             "in_corpus_mae_utkface measures agreement with UTKFace's "
             "DEX-derived labels, not accuracy. real_age_mae is the error "
-            "against real chronological age and is the user-facing number."
+            "against real chronological age, measured on the same split as "
+            "the real-age model so the two are directly comparable."
         ),
         "user_facing": {
-            "typical_error_years": 8.5,
+            "typical_error_years": 9.1,
             "typical_error_basis": (
                 "against a person's real age -- this model predicts how old "
                 "someone looks, which is not the same target"

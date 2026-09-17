@@ -82,9 +82,17 @@ and swapped when the toggle changes:
 
 | | real (default) | apparent |
 | --- | ---: | ---: |
-| typical error vs real age | ~6.3 yr | ~8.5 yr |
+| typical error vs real age | ~6.3 yr | ~9.1 yr |
 | under-18s shown as 18+ | 29.6% | 40.3% |
 | band caveat | none | shown 40+ reads ~6 yr high |
+
+Both error figures are measured on the **same** held-out split through the same
+server path, so the comparison the toggle invites is a fair one. An earlier
+revision quoted 8.5 for the apparent model from a different corpus — a real
+measurement, but not one you can subtract from 6.3.
+
+Neither is "the accurate one": they optimise different targets, and the apparent
+model is being scored here against something it was never trained to predict.
 
 The caveat is the sharp case: **it is true of the apparent-age model and false
 of the real-age one**, so a single hardcoded band would be actively wrong for

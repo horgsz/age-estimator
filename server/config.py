@@ -158,7 +158,7 @@ def digest_owner(digest: str | None) -> str | None:
 # Every MAE on this page is against UTKFace labels, which are DEX-algorithm
 # estimates rather than real ages -- they are useful for *ranking* margins
 # against each other but they are not accuracy. Against real chronological ages
-# the model is at 8.52 (APPA-REAL). Do not quote any number from this file to a
+# the model is at 9.11 (real-GT held-out split). Do not quote any number here to a
 # user.
 #
 # It was 0.4 before any of this was measured, which framed the face at ~31% of

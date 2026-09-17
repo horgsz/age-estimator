@@ -204,7 +204,8 @@ def test_health_does_not_present_in_corpus_mae_as_real_accuracy():
     caller would understate the error a user actually experiences by ~4 years.
     """
     utk = MEASURED_ACCURACY_BY_DIGEST["56894c480044"]
-    assert utk["real_age_mae"] == pytest.approx(8.52)
+    assert utk["real_age_mae"] == pytest.approx(9.11)
+    assert utk["real_age_mae_appa_all"] == pytest.approx(8.52)
     assert utk["in_corpus_mae_utkface"] == pytest.approx(4.762)
     assert utk["real_age_mae"] > utk["in_corpus_mae_utkface"]
     assert "DEX" in utk["accuracy_note"]

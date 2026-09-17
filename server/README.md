@@ -89,7 +89,13 @@ loaded checkpoint's `sha256`. Two artifacts are in it:
 | sha256 | model | real-age MAE | in-corpus UTKFace MAE |
 | --- | --- | ---: | ---: |
 | `fb629f49987a` | real-GT (served) | **6.34** | `null` — never saw UTKFace |
-| `56894c480044` | UTKFace/DEX (fallback) | 8.52 | 4.762 |
+| `56894c480044` | UTKFace/DEX (fallback) | 9.11 | 4.762 |
+
+Both `real_age_mae` values are measured on the **same** held-out split through
+the same harness, because the toggle shows them side by side and an unequal
+comparison is worse than no comparison. The fallback also has an 8.52 recorded
+against all of APPA-REAL (`real_age_mae_appa_all`); that is a valid number for
+those weights but not comparable to 6.34, so it is not the user-facing one.
 
 Any checkpoint not in the table reports `null` with an `accuracy_note` saying
 so. Sibling artifacts exist (no-smoothing and CE variants), and pointing
