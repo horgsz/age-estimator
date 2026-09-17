@@ -1036,6 +1036,47 @@ rest was not; neither identifies what the rest is. AgeDB and FG-NET carry real
 ages only, so they cannot answer it. FG-NET additionally has **zero images above
 age 69**, so it is silent on precisely the band in question.
 
+### σ sets the uncertainty interval, not just the loss
+
+Discovered after publishing, from a regression the server session measured: the
+68%-nominal confidence interval covers **60.8%** under the real-GT model, down
+from 75% under the shipped one. It is the one metric that got *worse* in the
+swap, and the mechanism appears to be DLDL — which is to say, mine.
+
+DLDL trains every face toward a Gaussian of **fixed σ=2.5**, and KL penalises the
+predicted distribution being too *sharp* as well as too broad (verified
+numerically when the loss was built: KL rises as logits sharpen past the target).
+So the decoded distribution's width is no longer primarily an expression of
+per-face uncertainty — it is substantially anchored to a hyperparameter.
+
+The 0.16/0.84 quantiles of `N(μ, 2.5)` span exactly ±1σ = **5.0 years**. Against
+an MAE of 6.39, an interval anchored near that width must undercover. Observed
+coverage is higher than a perfect σ=2.5 fit would give, so the model is hedging
+wider than its target on hard faces and real signal survives — but the anchor is
+pulling width down, and the interval's nominal 68% label is not trustworthy.
+
+**This is a falsifiable claim, not a conclusion.** If it holds, the real-GT
+model's interval widths should be markedly *less dispersed* across faces than the
+shipped model's, and width should correlate less well with `|error|`. If widths
+are just as dispersed and just as predictive, the explanation is ordinary
+miscalibration and this account is wrong.
+
+Note the *ranking* signal is intact either way — the server measured
+`r(confidence, |error|) = −0.343` with MAE by confidence quartile
+8.86 / 6.46 / 5.84 / 4.21. What would be unreliable is the interval's absolute
+width, not its ordering.
+
+**Consequence for the queued σ sweep: it must report coverage alongside MAE.**
+The two objectives can conflict — a smaller σ may lower MAE while degrading
+calibration further — so a sweep optimising MAE alone would improve the headline
+number and silently worsen a metric nothing else checks. That is the same failure
+this document keeps recording in different forms.
+
+The right response was *not* to widen the quantiles until coverage reached 68%.
+That fits the evaluation set and yields a number that looks calibrated and
+generalises nowhere. The server declined to do it and documented the regression
+instead, which is correct regardless of which explanation turns out to hold.
+
 ### What this does not show
 
 - **Not a better product model, necessarily.** If the goal is to predict how old
@@ -1043,8 +1084,10 @@ age 69**, so it is silent on precisely the band in question.
   This model is better at chronological age. Those are different products, and
   the 5.55-vs-6.39 comparison people will reach for is between two different
   questions on two different corpora.
-- **σ=2.5 was not tuned.** It was the midpoint of a suggested range and the first
-  value tried. The DLDL result may improve or may be partly luck.
+- **σ=2.5 was not tuned, and it does more than one job.** It was the midpoint of
+  a suggested range and the first value tried, so the DLDL result may improve or
+  may be partly luck. More importantly, σ sets the **width of the predicted
+  distribution**, not just the shape of the training target — see below.
 - **One seed per variant.** The CE-vs-DLDL gap (6.850 vs 6.393) is large enough
   to be believable; the expectation-vs-median gaps near zero are within what a
   seed change could plausibly move. The *sign flip* across smoothing levels
