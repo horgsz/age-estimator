@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Age estimator</title>
+    <link rel="icon" href="data:," />
+    <script type="module" crossorigin src="/age-estimator/assets/main-8A6xeoiV.js"></script>
+    <link rel="modulepreload" crossorigin href="/age-estimator/assets/modulepreload-polyfill-B5Qt9EMX.js">
+    <link rel="stylesheet" crossorigin href="/age-estimator/assets/main-BXgc8zUd.css">
+  </head>
+  <body>
+    <main class="app">
+      <header class="app__header">
+        <h1>Age estimator</h1>
+        <!-- Both lines are filled in from /health once the active model is
+             known. They start unquantified on purpose: the figures are
+             properties of a specific checkpoint, so this layer -- which cannot
+             know which one is loaded -- must not hardcode any of them. -->
+        <p id="app-sub" class="app__sub">
+          Point a camera at a face, or drop in a photo. Estimates are rough, and
+          individual faces can be a long way out.
+        </p>
+        <p id="app-warn" class="app__warn">
+          <strong>Not usable for age verification.</strong> A large share of
+          people under 18 are shown as 18 or over. Do not use this to decide
+          whether someone meets an age limit.
+        </p>
+        <!-- Only true of the browser build, so it is filled in by the active
+             engine rather than asserted here. -->
+        <p id="privacy-note" class="app__privacy" hidden></p>
+        <div id="model-banner" class="banner banner--hidden" role="status"></div>
+
+        <!-- Real byte progress for the 6.2 MB model download. An indeterminate
+             spinner on a multi-megabyte fetch is indistinguishable from a hang. -->
+        <div id="load-progress" class="loader" role="status" aria-live="polite" hidden>
+          <div class="loader__row">
+            <span id="load-label" class="loader__label"></span>
+            <span id="load-detail" class="loader__detail"></span>
+          </div>
+          <div class="loader__track">
+            <div id="load-bar" class="loader__bar"></div>
+          </div>
+        </div>
+      </header>
+
+      <section class="panel" aria-labelledby="capture-heading">
+        <h2 id="capture-heading" class="panel__title">Capture</h2>
+
+        <div id="camera-stage" class="stage">
+          <video id="preview" class="stage__media" playsinline muted autoplay></video>
+          <div id="camera-message" class="stage__message">
+            <p id="camera-message-text">Camera is off.</p>
+            <button id="enable-camera" class="btn btn--primary" type="button">
+              Enable camera
+            </button>
+          </div>
+        </div>
+
+        <div class="controls">
+          <label class="control control--grow">
+            <span class="control__label">Camera</span>
+            <select id="device-select" class="control__input" disabled>
+              <option value="">No cameras found</option>
+            </select>
+          </label>
+
+          <label class="control control--check">
+            <input id="mirror-toggle" type="checkbox" checked />
+            <span>Mirror (selfie view)</span>
+          </label>
+        </div>
+
+        <fieldset class="control-group" id="model-picker-group">
+          <legend class="control__label">What to estimate</legend>
+          <div class="controls controls--models" id="model-picker"></div>
+          <p id="model-note" class="tuning__help"></p>
+        </fieldset>
+
+        <div class="controls">
+          <button id="capture" class="btn btn--primary" type="button" disabled>
+            Capture &amp; estimate
+          </button>
+          <button id="choose-file" class="btn" type="button">Upload a photo…</button>
+          <input id="file-input" type="file" accept="image/*" hidden />
+        </div>
+
+        <div id="dropzone" class="dropzone" tabindex="0" role="button"
+             aria-label="Drop an image here to estimate age">
+          <span>Drag &amp; drop an image here</span>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="result-heading">
+        <h2 id="result-heading" class="panel__title">Result</h2>
+
+        <div id="status" class="status status--idle" role="status" aria-live="polite">
+          Nothing analysed yet.
+        </div>
+
+        <div id="result-stage" class="stage stage--result stage--empty">
+          <canvas id="result-canvas" class="stage__media"></canvas>
+          <div id="overlay" class="overlay"></div>
+        </div>
+
+        <ul id="face-list" class="faces"></ul>
+
+        <details id="tuning" class="tuning">
+          <summary class="tuning__summary">Crop margin (advanced)</summary>
+          <p class="tuning__help">
+            How much padding is added around the detected face box before the
+            crop is sent to the model. It must match how the training images
+            were framed &mdash; measured at <code>0.0</code> for UTKFace, i.e.
+            the raw detector box. Leave blank to use the default.
+            Opening this panel also reveals the raw range and bbox per face.
+          </p>
+          <div class="controls">
+            <label class="control">
+              <span class="control__label">Margin</span>
+              <input id="crop-margin" class="control__input control__input--num"
+                     type="number" step="0.005" min="-0.5" max="2"
+                     placeholder="server default" />
+            </label>
+            <button id="reanalyse" class="btn" type="button" disabled>
+              Re-analyse last frame
+            </button>
+          </div>
+          <p id="tuning-note" class="tuning__note" hidden></p>
+        </details>
+      </section>
+    </main>
+
+  </body>
+</html>

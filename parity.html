@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Age estimator — parity harness</title>
+    <link rel="icon" href="data:," />
+    <script type="module" crossorigin src="/age-estimator/assets/parity-CYr2aO-T.js"></script>
+    <link rel="modulepreload" crossorigin href="/age-estimator/assets/modulepreload-polyfill-B5Qt9EMX.js">
+    <link rel="modulepreload" crossorigin href="/age-estimator/assets/engine-CGr2Luts.js">
+  </head>
+  <body>
+    <!--
+      A driver surface for `parity/run_browser.mjs`, not a page for people.
+
+      It loads the same modules the app loads and exposes `window.__parity`, so
+      the numbers the harness compares against `server/` come out of the build
+      that actually ships rather than a test-only reconstruction of it.
+    -->
+    <main>
+      <h1>Parity harness</h1>
+      <p>
+        This page exists so a headless browser can run the deployed inference
+        path over fixed images and report every intermediate for comparison
+        against the Python server. See <code>parity/README.md</code>.
+      </p>
+      <p>Status: <strong id="status">loading…</strong></p>
+    </main>
+  </body>
+</html>
