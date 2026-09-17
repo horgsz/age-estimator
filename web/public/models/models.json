@@ -1,0 +1,126 @@
+{
+  "default": "real",
+  "available": [
+    "real",
+    "apparent"
+  ],
+  "models": [
+    {
+      "key": "real",
+      "label": "Real age",
+      "question": "How old this person actually is",
+      "explanation": "Trained on 25,080 photos with real chronological ages (AgeDB, APPA-REAL, FG-NET). Typical error about 6.4 years against a person's actual age.",
+      "available": true,
+      "identity_verified": true,
+      "asset": "age_model_realgt.onnx",
+      "bytes": 6496963,
+      "sha256": "6816bd2ddc5b",
+      "checkpoint": {
+        "onnx_sha256": "6816bd2ddc5b",
+        "exported_from_sha256": "fb629f49987a",
+        "expected_checkpoint_sha256": "fb629f49987a",
+        "export_verified": true,
+        "export_max_logit_diff": 6.67572021484375e-06,
+        "export_logit_tolerance": 0.001,
+        "real_age_mae": 6.34,
+        "real_age_corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3807",
+        "in_corpus_mae_utkface": null,
+        "accuracy_note": "real_age_mae is the error against real chronological age, measured end to end through this server's detect-crop-decode path. This model never saw UTKFace, so there is no in-corpus DEX figure and none should be invented for it.",
+        "user_facing": {
+          "typical_error_years": 6.3,
+          "typical_error_basis": "against a person's real age",
+          "gating_under18_shown_adult_pct": 29.6,
+          "caveat": null
+        }
+      }
+    },
+    {
+      "key": "apparent",
+      "label": "Apparent age",
+      "question": "How old this person looks",
+      "explanation": "Trained on UTKFace, whose labels are themselves algorithmic estimates of apparent age. It reproduces how old a face reads to people, which is not the same thing as how old they are.",
+      "available": true,
+      "identity_verified": true,
+      "asset": "age_model.onnx",
+      "bytes": 6496963,
+      "sha256": "48b84e95822d",
+      "checkpoint": {
+        "onnx_sha256": "48b84e95822d",
+        "exported_from_sha256": "56894c480044",
+        "expected_checkpoint_sha256": "56894c480044",
+        "export_verified": true,
+        "export_max_logit_diff": 9.5367431640625e-06,
+        "export_logit_tolerance": 0.001,
+        "real_age_mae": 9.11,
+        "real_age_corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3807",
+        "real_age_mae_appa_all": 8.52,
+        "real_age_corpus_appa_all": "APPA-REAL, n=7534",
+        "in_corpus_mae_utkface": 4.762,
+        "accuracy_note": "in_corpus_mae_utkface measures agreement with UTKFace's DEX-derived labels, not accuracy. real_age_mae is the error against real chronological age, measured on the same split as the real-age model so the two are directly comparable.",
+        "user_facing": {
+          "typical_error_years": 9.1,
+          "typical_error_basis": "against a person's real age -- this model predicts how old someone looks, which is not the same target",
+          "gating_under18_shown_adult_pct": 40.3,
+          "caveat": {
+            "min_age": 40,
+            "short": "reads high",
+            "long": "Faces shown as 40 or over tend to read about 6 years high on this model, and are roughly twice as imprecise as younger ones. The estimate is not corrected for it."
+          }
+        }
+      }
+    }
+  ],
+  "interval_calibration": {
+    "nominal": 0.68,
+    "measured": {
+      "real": 0.608,
+      "apparent": 0.617
+    },
+    "corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3807",
+    "scope": "corpus",
+    "note": "The low/high interval is nominally 68% (the 0.16/0.84 quantiles) but covers about 61% on this corpus. The shortfall is a property of the construction and corpus, not of either checkpoint -- the two models differ by 0.9pp. Not retuned, because tuning it to the split it is measured on would be fitting the evaluation set."
+  },
+  "preprocessing": {
+    "crop_margin": 0.0,
+    "input_size": 224,
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "num_bins": 101,
+    "decode": "median"
+  },
+  "detector": {
+    "name": "YuNet (face_detection_yunet_2023mar)",
+    "score_threshold": 0.7,
+    "nms_threshold": 0.3,
+    "top_k": 50,
+    "max_detect_side": 1024
+  },
+  "catalog": [
+    {
+      "key": "real",
+      "filename": "age_model_realgt.pt",
+      "env_var": "AGE_MODEL_PATH_REAL",
+      "expected_digest": "fb629f49987a",
+      "label": "Real age",
+      "question": "How old this person actually is",
+      "explanation": "Trained on 25,080 photos with real chronological ages (AgeDB, APPA-REAL, FG-NET). Typical error about 6.4 years against a person's actual age."
+    },
+    {
+      "key": "apparent",
+      "filename": "age_model.pt",
+      "env_var": "AGE_MODEL_PATH_APPARENT",
+      "expected_digest": "56894c480044",
+      "label": "Apparent age",
+      "question": "How old this person looks",
+      "explanation": "Trained on UTKFace, whose labels are themselves algorithmic estimates of apparent age. It reproduces how old a face reads to people, which is not the same thing as how old they are."
+    }
+  ]
+}

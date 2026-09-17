@@ -1,0 +1,16 @@
+# Staged build inputs -- see web/scripts/stage-assets.mjs.
+#
+# Everything here is either copied from elsewhere in the repo (`checkpoints/`,
+# `node_modules/onnxruntime-web/dist/`) or downloaded and checksummed. Tracking
+# a second copy of a 6.2 MB model is how the two get out of sync, and the
+# digest check in the staging script only helps if there is one original.
+*
+!.gitignore
+
+# The exception. Generating models.json needs torch + onnxruntime, because it
+# verifies that each ONNX export really is the checkpoint its accuracy figures
+# were measured on. Making CI install a deep-learning stack to publish a static
+# site is not worth it, so the file is committed and a server test
+# (test_static_registry.py) fails if it has drifted from server/.
+!models/
+!models/models.json
