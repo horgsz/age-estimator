@@ -75,12 +75,26 @@ person actually is** (default) or **how old this person looks**. Changing it
 re-analyses the retained frame rather than re-capturing, so the two answers come
 from byte-identical pixels.
 
-The accuracy figures in the page header were measured on the real-age model
-only. Selecting the apparent-age model removes them rather than restating them,
-since we have no measured substitute and a plausible wrong number is worse than
-none. The age-verification warning below is **not** removed -- only its number
-is -- because the apparent-age model is the worse of the two on exactly that
-risk, so dropping the warning where it matters more would be backwards.
+**Every derived figure is keyed to the active model**, not to the app. The
+typical-error number, the age-gating percentage and the caveat band are all
+served per model by `/health`, keyed by the checkpoint's own content digest,
+and swapped when the toggle changes:
+
+| | real (default) | apparent |
+| --- | ---: | ---: |
+| typical error vs real age | ~6.3 yr | ~8.5 yr |
+| under-18s shown as 18+ | 29.6% | 40.3% |
+| band caveat | none | shown 40+ reads ~6 yr high |
+
+The caveat is the sharp case: **it is true of the apparent-age model and false
+of the real-age one**, so a single hardcoded band would be actively wrong for
+one of them. `index.html` therefore hardcodes no figure at all — the header
+starts unquantified and is filled in once the active model is known.
+
+An unmeasured checkpoint supplies none of these, and the copy falls back to
+unquantified wording rather than borrowing another model's numbers. The
+age-verification warning is never suppressed, only de-quantified: a model with
+no measured figure is not thereby safer, just unmeasured.
 
 ### Not usable for age verification
 

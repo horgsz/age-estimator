@@ -10,15 +10,18 @@
     <main class="app">
       <header class="app__header">
         <h1>Age estimator</h1>
+        <!-- Both lines are filled in from /health once the active model is
+             known. They start unquantified on purpose: the figures are
+             properties of a specific checkpoint, so this layer -- which cannot
+             know which one is loaded -- must not hardcode any of them. -->
         <p id="app-sub" class="app__sub">
-          Point a camera at a face, or drop in a photo. Estimates are rough:
-          against real ages they are off by about 6 years on average, and
-          individual faces can be much further out.
+          Point a camera at a face, or drop in a photo. Estimates are rough, and
+          individual faces can be a long way out.
         </p>
         <p id="app-warn" class="app__warn">
-          <strong>Not usable for age verification.</strong> In testing, about
-          <strong>30% of people under 18 were shown as 18 or over</strong>. Do
-          not use this to decide whether someone meets an age limit.
+          <strong>Not usable for age verification.</strong> A large share of
+          people under 18 are shown as 18 or over. Do not use this to decide
+          whether someone meets an age limit.
         </p>
         <div id="model-banner" class="banner banner--hidden" role="status"></div>
       </header>

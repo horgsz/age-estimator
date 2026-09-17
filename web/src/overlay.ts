@@ -52,8 +52,17 @@ export function formatRange(face: FaceResult): string {
 /**
  * Ages where the displayed number is least reliable.
  *
- * CURRENTLY: no caveat is shipped. `tailCaveat` always returns null. The
- * plumbing is kept deliberately -- see "why this is kept" at the end.
+ * THE CAVEAT IS A PROPERTY OF THE CHECKPOINT, NOT OF THIS APP.
+ *
+ * The two selectable models have genuinely different error profiles, so the
+ * caveat set is served per model by /health (keyed by the checkpoint's own
+ * content digest) and passed in here. This file decides only how to *say* it.
+ *
+ * Hardcoding a band here would mean one model's measured limitation being
+ * asserted about the other's predictions -- which is exactly wrong in this
+ * case, since the ">= 40 reads high" band is true of the apparent-age model
+ * and false of the real-age one. An unrecognised checkpoint supplies no
+ * caveat at all, which is the safe direction for a directional claim.
  *
  * Thresholds and wording must be conditioned on the *predicted* age, because
  * that is the only thing the UI knows. Binning by true age answers a question
@@ -131,8 +140,16 @@ export interface TailCaveat {
   long: string;
 }
 
-export function tailCaveat(_age: number): TailCaveat | null {
-  return null;
+/** A model's caveat band, as served by `/health`. */
+export interface CaveatSpec {
+  min_age: number;
+  short: string;
+  long: string;
+}
+
+export function tailCaveat(age: number, spec?: CaveatSpec | null): TailCaveat | null {
+  if (!spec || !Number.isFinite(age) || age < spec.min_age) return null;
+  return { kind: 'mid', short: spec.short, long: spec.long };
 }
 
 /** Confidence ramp: red (uncertain) to green (confident). */
@@ -146,6 +163,7 @@ export function renderBoxes(
   faces: FaceResult[],
   imageWidth: number,
   imageHeight: number,
+  caveatSpec?: CaveatSpec | null,
 ): void {
   overlay.replaceChildren();
   if (!imageWidth || !imageHeight) return;
@@ -194,7 +212,7 @@ export function renderBoxes(
 
     label.append(unit, age, bar, detail);
 
-    const caveat = tailCaveat(face.age);
+    const caveat = tailCaveat(face.age, caveatSpec);
     if (caveat) {
       const flag = document.createElement('span');
       flag.className = `face-box__caveat face-box__caveat--${caveat.kind}`;
@@ -215,7 +233,11 @@ export function renderBoxes(
   });
 }
 
-export function renderFaceList(list: HTMLElement, faces: FaceResult[]): void {
+export function renderFaceList(
+  list: HTMLElement,
+  faces: FaceResult[],
+  caveatSpec?: CaveatSpec | null,
+): void {
   list.replaceChildren();
 
   faces.forEach((face, index) => {
@@ -250,7 +272,7 @@ export function renderFaceList(list: HTMLElement, faces: FaceResult[]): void {
 
     item.append(heading, caption, age, bar, confidence);
 
-    const caveat = tailCaveat(face.age);
+    const caveat = tailCaveat(face.age, caveatSpec);
     if (caveat) {
       const note = document.createElement('p');
       note.className = `faces__caveat faces__caveat--${caveat.kind}`;

@@ -86,6 +86,20 @@ MEASURED_ACCURACY_BY_DIGEST = {
             "model never saw UTKFace, so there is no in-corpus DEX figure and "
             "none should be invented for it."
         ),
+        "user_facing": {
+            "typical_error_years": 6.3,
+            "typical_error_basis": "against a person's real age",
+            # About 30% of true under-18s display as 18 or over. Measured end
+            # to end on these weights; the observable converse is 4.1%, and the
+            # ~7x divergence is pure base rate.
+            "gating_under18_shown_adult_pct": 29.6,
+            # No band caveat is supportable on this model. Binned by DISPLAYED
+            # age the largest bias split at any threshold is 1.52 years, and
+            # the residual precision gradient is already carried per face by
+            # the confidence bar (r = -0.343). See overlay.ts for the full
+            # derivation and the standard a future caveat must clear.
+            "caveat": None,
+        },
     },
     # The original UTKFace model. Kept because it is still a supported fallback.
     # Its two figures differ by ~4 years and measure different things, which is
@@ -99,6 +113,29 @@ MEASURED_ACCURACY_BY_DIGEST = {
             "DEX-derived labels, not accuracy. real_age_mae is the error "
             "against real chronological age and is the user-facing number."
         ),
+        "user_facing": {
+            "typical_error_years": 8.5,
+            "typical_error_basis": (
+                "against a person's real age -- this model predicts how old "
+                "someone looks, which is not the same target"
+            ),
+            "gating_under18_shown_adult_pct": 40.3,
+            # This caveat IS supportable on these weights and is false on the
+            # real-age model, which is exactly why it lives next to a digest
+            # rather than in the UI. Re-binned by DISPLAYED age on the real-GT
+            # held-out split: >=40 n=1852 MAE 11.62 bias +5.70, against <40
+            # n=1966 MAE 6.78 bias -0.55. Independently reproduced to the
+            # decimal by the ml/ side from the same dump.
+            "caveat": {
+                "min_age": 40,
+                "short": "reads high",
+                "long": (
+                    "Faces shown as 40 or over tend to read about 6 years high "
+                    "on this model, and are roughly twice as imprecise as "
+                    "younger ones. The estimate is not corrected for it."
+                ),
+            },
+        },
     },
 }
 
@@ -497,6 +534,11 @@ class TorchPredictor(AgePredictor):
                     "real_age_mae": None,
                     "real_age_corpus": None,
                     "in_corpus_mae_utkface": None,
+                    # Fails closed: no figures and NO CAVEAT for an artifact we
+                    # have not measured. A caveat is a directional claim about
+                    # specific weights; asserting one we have not verified is
+                    # the same class of error as reporting another model's MAE.
+                    "user_facing": None,
                     "accuracy_note": (
                         "Unmeasured artifact: we have no end-to-end accuracy "
                         "figures for this checkpoint (known: "

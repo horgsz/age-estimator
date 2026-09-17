@@ -2,8 +2,9 @@ import './styles.css';
 
 import { ApiError, API_BASE, estimate, fetchHealth } from './api';
 import { Camera, CameraError, canvasToJpeg } from './camera';
+import type { CaveatSpec } from './overlay';
 import { clearCanvas, drawToCanvas, renderBoxes, renderFaceList } from './overlay';
-import type { FaceResult, ModelsInfo } from './types';
+import type { FaceResult, ModelsInfo, UserFacing } from './types';
 
 /** Longest side of an analysed frame. Keeps uploads small and inference quick. */
 const MAX_ANALYSED_SIDE = 1600;
@@ -74,35 +75,46 @@ let selectedModel: string | null = null;
 let models: ModelsInfo | null = null;
 
 /**
- * Accuracy copy is a property of specific weights, not of the app.
+ * Every derived figure shown to the user is a property of specific weights.
  *
- * The header quotes figures measured on the real-GT model. They are simply
- * untrue of the apparent-age model, which was measured against a different
- * target entirely, so when it is selected the numbers are removed rather than
- * restated — we have no measured substitute to put there, and a plausible
- * wrong number is worse than none.
+ * The typical-error number, the age-gating percentage and the caveat band all
+ * differ between the two models, and the caveat in particular is true of one
+ * and FALSE of the other. So none of them are constants here: they are served
+ * per model by /health, keyed by the checkpoint's own content digest, and read
+ * back out for whichever model is active.
  *
- * The age-verification warning is NOT removed. It is a safety disclaimer, and
- * the apparent-age model is the *worse* of the two on exactly that risk, so
- * dropping it where it matters more would be precisely backwards. Only its
- * number goes; the claim stays.
+ * An unmeasured checkpoint supplies none of them. The copy then falls back to
+ * unquantified wording rather than borrowing another model's numbers -- the
+ * safe direction, and the same rule /health applies to accuracy.
  */
-const DEFAULT_SUB = ui.appSub.innerHTML;
-const DEFAULT_WARN = ui.appWarn.innerHTML;
+function activeUserFacing(): UserFacing | null {
+  const active = models?.models.find((m) => m.key === selectedModel);
+  return active?.checkpoint?.user_facing ?? null;
+}
 
-const GENERIC_SUB =
-  'Point a camera at a face, or drop in a photo. Estimates are rough, and ' +
-  'individual faces can be a long way out.';
-const GENERIC_WARN =
-  '<strong>Not usable for age verification.</strong> A large share of people ' +
-  'under 18 are shown as 18 or over. Do not use this to decide whether ' +
-  'someone meets an age limit.';
+function activeCaveat(): CaveatSpec | null {
+  return activeUserFacing()?.caveat ?? null;
+}
 
 function syncAccuracyCopy(): void {
-  const isDefault = models === null || selectedModel === null
-    || selectedModel === models.default;
-  ui.appSub.innerHTML = isDefault ? DEFAULT_SUB : GENERIC_SUB;
-  ui.appWarn.innerHTML = isDefault ? DEFAULT_WARN : GENERIC_WARN;
+  const uf = activeUserFacing();
+
+  ui.appSub.textContent = uf
+    ? 'Point a camera at a face, or drop in a photo. Estimates are rough: ' +
+      `they are off by about ${Math.round(uf.typical_error_years)} years on ` +
+      `average ${uf.typical_error_basis}, and individual faces can be much ` +
+      'further out.'
+    : 'Point a camera at a face, or drop in a photo. Estimates are rough, and ' +
+      'individual faces can be a long way out.';
+
+  // The age-verification warning is never suppressed, only de-quantified. It
+  // is a safety disclaimer, and the model with no measured figure is not
+  // thereby safer -- it is merely unmeasured.
+  const pct = uf ? `about ${Math.round(uf.gating_under18_shown_adult_pct)}%` : 'a large share';
+  ui.appWarn.innerHTML =
+    '<strong>Not usable for age verification.</strong> In testing, ' +
+    `<strong>${pct} of people under 18 were shown as 18 or over</strong>. ` +
+    'Do not use this to decide whether someone meets an age limit.';
 }
 
 function renderModelPicker(info: ModelsInfo): void {
@@ -224,8 +236,8 @@ function clearResult(): void {
 
 function showResult(faces: FaceResult[], width: number, height: number): void {
   ui.resultStage.classList.remove('stage--empty');
-  renderBoxes(ui.overlay, faces, width, height);
-  renderFaceList(ui.faceList, faces);
+  renderBoxes(ui.overlay, faces, width, height, activeCaveat());
+  renderFaceList(ui.faceList, faces, activeCaveat());
 
   if (faces.length === 0) {
     setStatus(

@@ -576,3 +576,27 @@ def test_a_slot_refuses_the_other_models_weights(tmp_path, monkeypatch):
     entry = registry_mod._load_entry(spec, detector=None)
     assert not entry.available
     assert "apparent" in (entry.unavailable_reason or "")
+
+
+def test_user_facing_figures_are_keyed_per_checkpoint():
+    """The >=40 caveat is true of one model and false of the other.
+
+    This is the reason the caveat lives beside a digest instead of in the UI.
+    Applying either model's band to the other would assert a measured
+    limitation about predictions it was never measured on.
+    """
+    real = MEASURED_ACCURACY_BY_DIGEST["fb629f49987a"]["user_facing"]
+    apparent = MEASURED_ACCURACY_BY_DIGEST["56894c480044"]["user_facing"]
+
+    assert real["caveat"] is None
+    assert apparent["caveat"]["min_age"] == 40
+    assert real["gating_under18_shown_adult_pct"] != apparent["gating_under18_shown_adult_pct"]
+
+
+def test_an_unmeasured_checkpoint_gets_no_caveat(tmp_path):
+    """Fails closed: an unrecognised artifact asserts no directional claim."""
+    ckpt = _write_checkpoint(tmp_path, name="mystery.pt")
+    info = TorchPredictor(str(ckpt)).describe_checkpoint()
+
+    assert info["sha256"] not in MEASURED_ACCURACY_BY_DIGEST
+    assert info["user_facing"] is None
