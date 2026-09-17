@@ -3,7 +3,7 @@
 Measured with [`make parity`](README.md#running-it). Regenerate this file's
 numbers by re-running it; do not edit them by hand.
 
-- **Commit:** `e89cccf` (first run with the harness in place)
+- **Commit:** `e89cccf` (parity figures), re-confirmed against the deployed site
 - **Date:** 2026-09-17
 - **Machine:** macOS, Apple silicon, Chromium 153 (Playwright headless shell)
 - **Python:** 3.13, OpenCV 4.14.0, PyTorch 2.14.0
@@ -11,7 +11,9 @@ numbers by re-running it; do not edit them by hand.
 
 ## Verdict
 
-**The two paths agree exactly.** Every detected box is identical, every
+**The two paths agree exactly**, both for a local build and for the live
+deployment at <https://horgsz.github.io/age-estimator/> (`run_browser.mjs
+--url .../parity.html` produces the same table). Every detected box is identical, every
 224×224×3 input tensor is bit-identical — not close, identical: zero differing
 float32 elements out of 150,528 per face, and matching sha256 digests of the
 tensor bytes — and every predicted age, interval bound and confidence figure is
@@ -115,33 +117,54 @@ between the `full` and `large` rows.
 
 Measured in a fresh browser context — empty HTTP cache — from navigation to a
 rendered age, which is what a visitor actually waits for. `DOMContentLoaded`
-happens far earlier and is not the number that matters.
+happens within a second and is not the number that matters; the page is
+interactive long before it can answer anything.
 
-| | localhost |
-| --- | ---: |
-| navigation to interactive | 21 ms |
-| first result (detector + model + WASM + inference) | 187 ms |
-| bytes transferred | 17.20 MB |
+### Against the deployed site
 
-Breakdown of the 17.20 MB:
+`https://horgsz.github.io/age-estimator/`, with `--throttle` applying a Chrome
+DevTools-equivalent network profile:
+
+| connection | navigation | first result | transferred |
+| --- | ---: | ---: | ---: |
+| unthrottled (fast fibre) | 80 ms | **504 ms** | 8.75 MB |
+| 4G, 10 Mbit / 40 ms RTT | 654 ms | **8.9 s** | 8.75 MB |
+| slow 4G, 1.6 Mbit / 150 ms RTT | 628 ms | **45.7 s** | 8.75 MB |
+
+Over the wire, gzipped by Pages:
 
 | asset | bytes |
 | --- | ---: |
-| `ort-wasm-simd-threaded.wasm` | 11,210,254 |
-| `age_model_realgt.onnx` + `face_detection_yunet_2023mar.dynamic.onnx` | 6,729,552 |
-| app JavaScript | 64,710 |
-| `ort-wasm-simd-threaded.mjs` | 20,856 |
-| `models.json` | 5,073 |
-| HTML | 1,208 |
+| `age_model_realgt.onnx` | 6,016,324 |
+| `ort-wasm-simd-threaded.wasm` | 2,923,198 |
+| `face_detection_yunet_2023mar.dynamic.onnx` | 202,655 |
+| app JavaScript | 22,676 |
+| `ort-wasm-simd-threaded.mjs` | 8,401 |
+| `models.json` | 1,654 |
+| HTML | 667 |
 
-**These are uncompressed, over loopback, and are the wrong number for a real
-visitor twice over.** GitHub Pages serves `.wasm` and `.onnx` compressed, which
-takes the WASM runtime from 11.2 MB to ≈2.8 MB on the wire, and the transfer
-itself is then bounded by the network rather than by anything measured here. See
-the deployed figures in the section below.
+GitHub Pages compresses both the WASM and the ONNX, which is why 17.2 MB of
+files arrive as 8.75 MB. It is still 8.75 MB, and **45.7 s on a slow mobile
+connection is the number this build's loading UX is designed around** — not the
+0.5 s one. The progress bar shows real byte counts for precisely that case, and
+the download is started on the first sign of intent (camera enabled, file picker
+opened, file dragged over the page) so it overlaps with the user framing their
+shot rather than beginning after it.
 
-The second visit is effectively free: both files are fetched with
-`cache: 'force-cache'` under stable names, so they come from the HTTP cache.
+The second visit is effectively free: the models are fetched with
+`cache: 'force-cache'` under stable, non-fingerprinted names.
+
+Only the default model is fetched. Selecting the other one costs a further
+6.2 MB, which is why both are not loaded up front — most visitors never touch
+the toggle.
+
+### Against a local build, for reference
+
+| | localhost |
+| --- | ---: |
+| navigation to interactive | 18 ms |
+| first result | 192 ms |
+| bytes transferred | 17.20 MB (uncompressed) |
 
 ## Known residual differences
 
