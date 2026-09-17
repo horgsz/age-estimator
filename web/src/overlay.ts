@@ -54,8 +54,27 @@ export function formatRange(face: FaceResult): string {
  *
  * Thresholds and wording are conditioned on the *predicted* age, because that
  * is the only thing the UI knows. Binning by true age answers a question the UI
- * cannot ask. This distinction has now inverted a conclusion twice, so it is
- * the first thing to check before changing anything here.
+ * cannot ask. This distinction has now inverted a conclusion three times, so it
+ * is the first thing to check before changing anything here.
+ *
+ * CORROBORATED on a second, independent corpus. The bands below come from
+ * APPA-REAL; the ml/ side later produced per-sample predictions over the whole
+ * real-ground-truth test split (AgeDB + APPA-REAL + FG-NET, n = 3,818, real
+ * chronological ages). Re-binning those by displayed age reproduces the shape:
+ *
+ *   shown <40   n=1966   MAE  6.78   bias −0.55
+ *   shown >=40  n=1852   MAE 11.62   bias +5.70
+ *
+ * Same direction, same threshold, on a different corpus with different
+ * subjects. The bias magnitude is smaller than APPA-REAL's +8.98, so the
+ * *existence* of the effect is well established while its exact size is
+ * corpus-dependent -- which is why the copy says "tends to read high" and
+ * quotes no number.
+ *
+ * That re-binning is also why the threshold has NOT been moved to match the
+ * newer real-GT model, whose displayed-age bias is near zero everywhere. That
+ * model is not what this app serves. Thresholds must be derived from the
+ * weights actually loaded, exactly as the /health accuracy figures are.
  *
  * These numbers come from APPA-REAL (7,534 images, real chronological ages,
  * YuNet on full original scenes) rather than from UTKFace. UTKFace's labels are

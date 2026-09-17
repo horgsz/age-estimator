@@ -68,6 +68,31 @@ Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
 * **Tail caveats.** The model's error is not uniform across ages, so the UI says
   so where it matters. See below.
 
+### Not usable for age verification
+
+**About 40% of people under 18 are displayed as 18 or over.** Measured on the
+real-ground-truth test split (AgeDB + APPA-REAL + FG-NET, n = 3,818, real
+chronological ages) using the weights this app serves:
+
+| threshold | true minors shown as adult | shown-adult who are minors |
+| ---: | ---: | ---: |
+| 13 | 24.9% | 2.2% |
+| 16 | 32.4% | 3.5% |
+| **18** | **40.3%** | **5.5%** |
+| 21 | 46.8% | 8.8% |
+
+The two columns answer different questions and **diverge by roughly 7×** at the
+18 threshold. The right-hand column is the one you can observe without knowing
+true ages — it makes the gate look 94.5% correct. The left-hand column is the
+one that matters if a gate is protecting a minor, and it is catastrophically
+worse. The difference is pure base rate: adults outnumber minors in the corpus,
+so most predictions above the line really are adults, while the minors who slip
+through are a large fraction of a small group.
+
+This is the same true-versus-predicted conditioning trap that runs through this
+project, in its highest-consequence form. The UI states the limitation in the
+header rather than burying it here.
+
 ### Accuracy — the number that matters
 
 **Against real chronological ages the MAE is 8.52 years** (APPA-REAL, 7,534

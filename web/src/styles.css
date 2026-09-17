@@ -55,6 +55,20 @@ body {
   color: var(--muted);
 }
 
+/* Deliberately not muted. This is the one claim on the page that has a
+   consequence if a user gets it wrong, so it must not read as fine print. */
+.app__warn {
+  margin: 10px 0 0;
+  max-width: 62ch;
+  padding: 9px 12px;
+  border-left: 3px solid var(--warn);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--warn) 72%, #ffffff);
+}
+
 @media (min-width: 900px) {
   .app {
     grid-template-columns: 1fr 1fr;
