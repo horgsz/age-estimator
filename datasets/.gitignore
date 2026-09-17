@@ -1,0 +1,6 @@
+# No dataset images are ever committed. Licences differ per source and several
+# forbid redistribution outright; the download scripts reproduce these dirs.
+raw/
+crops/
+__pycache__/
+*.pyc
