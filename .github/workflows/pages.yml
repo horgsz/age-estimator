@@ -17,6 +17,28 @@
 #   deep-learning stack on every deploy to re-derive a 5 KB file is a bad
 #   trade; server/tests/test_static_registry.py fails if the committed copy has
 #   drifted from server/.
+#
+# TWO PUBLISH PATHS, AND WHY
+#
+# actions/deploy-pages is the intended mechanism and the one to keep. It only
+# works when the repository's Pages source is set to "GitHub Actions": that
+# setting is what makes GitHub widen the auto-managed `github-pages`
+# environment's branch policy to include the default branch. While the source
+# is a branch, the policy allows only that branch, and a deploy from `master`
+# is rejected with "not allowed to deploy to github-pages due to environment
+# protection rules" -- after a successful build, which makes it look like a
+# build problem.
+#
+# Changing that setting needs repository admin. So rather than leave the
+# workflow red until someone with admin clicks it, the deploy step is chosen
+# from what the Pages API actually reports:
+#
+#   build_type == "workflow"  -> actions/deploy-pages (the good path)
+#   build_type == "legacy"    -> push web/dist to the configured branch
+#
+# The second is a fallback, not a design. Flip
+# Settings -> Pages -> Source to "GitHub Actions" and it stops running by
+# itself, with nothing to remove here.
 
 name: Deploy to GitHub Pages
 
@@ -26,7 +48,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # `contents: write` is only for the legacy-source fallback below, which has
+  # to push the built site to a branch. The deploy-pages path does not use it.
+  contents: write
   pages: write
   id-token: write
 
@@ -86,11 +110,15 @@ jobs:
             console.log("model assets match models.json");
           '
 
-      # `enablement` turns Pages on for the repository if it is not already.
-      # Doing it here rather than by hand means a fresh clone of this repo
-      # deploys without a manual settings step, and the workflow token is the
-      # one credential guaranteed to have `pages: write`.
+      # `enablement` turns Pages on if it is off, so a fresh clone of this repo
+      # deploys without a manual settings step. It needs administration rights
+      # that GITHUB_TOKEN does not always have -- on this repository it fails
+      # with "Resource not accessible by integration" -- so it is allowed to
+      # fail. The publish step below reads the real state from the API either
+      # way, and a genuinely unconfigured site fails there with a clearer
+      # message than this action gives.
       - uses: actions/configure-pages@v5
+        continue-on-error: true
         with:
           enablement: true
 
@@ -98,8 +126,48 @@ jobs:
         with:
           path: web/dist
 
+      # Which publish path can actually succeed. See the note at the top.
+      - id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          info=$(gh api "repos/${{ github.repository }}/pages" 2>/dev/null || echo '{}')
+          if [ "$info" = '{}' ]; then
+            echo "::error::GitHub Pages is not configured for this repository, and this workflow's token cannot enable it. Enable it once under Settings -> Pages (Source: GitHub Actions)."
+            exit 1
+          fi
+          build_type=$(echo "$info" | jq -r '.build_type // "none"')
+          branch=$(echo "$info" | jq -r '.source.branch // "gh-pages"')
+          echo "build_type=$build_type" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "Pages build_type=$build_type source branch=$branch"
+
+      - name: Publish to the Pages source branch (legacy source only)
+        if: steps.pages.outputs.build_type != 'workflow'
+        env:
+          BRANCH: ${{ steps.pages.outputs.branch }}
+        run: |
+          set -euo pipefail
+          echo "::warning::Pages source is the '$BRANCH' branch rather than GitHub Actions, so this run published to that branch instead of using actions/deploy-pages. Set Settings -> Pages -> Source to 'GitHub Actions' (needs repository admin) and this step stops running by itself."
+          # Jekyll would otherwise drop any path beginning with an underscore.
+          touch web/dist/.nojekyll
+          cd web/dist
+          git init -q -b "$BRANCH"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Deploy ${{ github.sha }}"
+          git push -q --force \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            "HEAD:refs/heads/$BRANCH"
+
+    outputs:
+      build_type: ${{ steps.pages.outputs.build_type }}
+
   deploy:
     needs: build
+    if: needs.build.outputs.build_type == 'workflow'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
