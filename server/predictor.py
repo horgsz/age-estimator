@@ -64,23 +64,42 @@ LOW_Q, HIGH_Q = 0.16, 0.84
 SUPPORTED_DECODES = ("median", "expectation")
 DEFAULT_DECODE = "median"
 
-# The exact artifact our own accuracy figures were measured on, and those
-# figures. Pinned together deliberately: accuracy is a property of a specific
-# set of weights, not of "the model", so swapping the checkpoint must invalidate
-# the numbers rather than silently relabel another model's performance.
-MEASURED_DIGEST = "56894c480044"
-MEASURED_ACCURACY = {
-    # Measured against UTKFace labels, which are themselves DEX-algorithm
-    # estimates -- so this is agreement with a labelling method, not accuracy.
-    "in_corpus_mae_utkface": 4.762,
-    # Measured against real chronological ages (APPA-REAL, 7,534 images). This
-    # is the number any user-facing surface must quote.
-    "real_age_mae_appa_real": 8.52,
-    "accuracy_note": (
-        "in_corpus_mae_utkface measures agreement with UTKFace's "
-        "DEX-derived labels. real_age_mae_appa_real is the error "
-        "against real chronological age and is the user-facing number."
-    ),
+# Accuracy figures, keyed by the exact artifact they were measured on.
+#
+# Accuracy is a property of a specific set of weights, not of "the model", so
+# swapping the checkpoint must invalidate the numbers rather than silently
+# relabel another model's performance. An artifact absent from this table
+# reports nulls and says why.
+#
+# Every figure here is measured end to end through THIS server's path (YuNet
+# detect -> our crop -> model -> decode), not copied from a training report.
+MEASURED_ACCURACY_BY_DIGEST = {
+    # Real chronological ground truth: AgeDB + APPA-REAL + FG-NET, no UTKFace
+    # and no DEX-derived labels anywhere in training or evaluation.
+    "fb629f49987a": {
+        "real_age_mae": 6.34,
+        "real_age_corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3807",
+        "in_corpus_mae_utkface": None,
+        "accuracy_note": (
+            "real_age_mae is the error against real chronological age, measured "
+            "end to end through this server's detect-crop-decode path. This "
+            "model never saw UTKFace, so there is no in-corpus DEX figure and "
+            "none should be invented for it."
+        ),
+    },
+    # The original UTKFace model. Kept because it is still a supported fallback.
+    # Its two figures differ by ~4 years and measure different things, which is
+    # the whole reason this table exists.
+    "56894c480044": {
+        "real_age_mae": 8.52,
+        "real_age_corpus": "APPA-REAL, n=7534",
+        "in_corpus_mae_utkface": 4.762,
+        "accuracy_note": (
+            "in_corpus_mae_utkface measures agreement with UTKFace's "
+            "DEX-derived labels, not accuracy. real_age_mae is the error "
+            "against real chronological age and is the user-facing number."
+        ),
+    },
 }
 
 
@@ -469,20 +488,23 @@ class TorchPredictor(AgePredictor):
         # is the same failure the whole accuracy-labelling exercise was about,
         # so it fails closed: an unrecognised artifact reports nulls and says
         # why, rather than confidently serving another model's numbers.
-        if self._digest == MEASURED_DIGEST:
-            info.update(MEASURED_ACCURACY)
+        measured = MEASURED_ACCURACY_BY_DIGEST.get(self._digest)
+        if measured is not None:
+            info.update(measured)
         else:
             info.update(
                 {
+                    "real_age_mae": None,
+                    "real_age_corpus": None,
                     "in_corpus_mae_utkface": None,
-                    "real_age_mae_appa_real": None,
                     "accuracy_note": (
-                        "Unmeasured artifact: this checkpoint is not the one our "
-                        f"accuracy figures were measured on (expected sha256 "
-                        f"{MEASURED_DIGEST}). Its own recorded_test_mae is not "
-                        "comparable across corpora -- real-age and DEX-label MAE "
-                        "measure different things. Re-run server/tools/"
-                        "eval_end_to_end.py before quoting any number."
+                        "Unmeasured artifact: we have no end-to-end accuracy "
+                        "figures for this checkpoint (known: "
+                        f"{', '.join(sorted(MEASURED_ACCURACY_BY_DIGEST))}). Its "
+                        "own recorded_test_mae is not comparable across corpora "
+                        "-- real-age and DEX-label MAE measure different things. "
+                        "Re-run server/tools/eval_end_to_end.py before quoting "
+                        "any number."
                     ),
                 }
             )

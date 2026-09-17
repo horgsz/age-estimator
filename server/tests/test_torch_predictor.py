@@ -15,7 +15,7 @@ from conftest import FakeDetector
 
 from server import config
 from server.predictor import (
-    MEASURED_DIGEST,
+    MEASURED_ACCURACY_BY_DIGEST,
     StubPredictor,
     TorchPredictor,
     load_predictor,
@@ -194,49 +194,54 @@ def test_no_deviation_warning_for_a_contract_shaped_checkpoint(checkpoint, caplo
     assert "CONTRACT DEVIATION" not in warnings
 
 
-def test_health_does_not_present_in_corpus_mae_as_real_accuracy(checkpoint):
+def test_health_does_not_present_in_corpus_mae_as_real_accuracy():
     """UTKFace labels are DEX estimates, so in-corpus MAE is not accuracy.
 
-    Both figures are published so the distinction travels with the number. The
-    real-age figure must be the larger of the two -- if a future change makes
-    the in-corpus number look like the headline, a caller would understate the
-    error a user actually experiences by ~4 years.
+    Where an artifact has both figures they are published together, so the
+    distinction travels with the number. The real-age figure must be the larger
+    -- if a future change makes the in-corpus number look like the headline, a
+    caller would understate the error a user actually experiences by ~4 years.
     """
-    from server.predictor import MEASURED_ACCURACY
+    utk = MEASURED_ACCURACY_BY_DIGEST["56894c480044"]
+    assert utk["real_age_mae"] == pytest.approx(8.52)
+    assert utk["in_corpus_mae_utkface"] == pytest.approx(4.762)
+    assert utk["real_age_mae"] > utk["in_corpus_mae_utkface"]
+    assert "DEX" in utk["accuracy_note"]
 
-    assert MEASURED_ACCURACY["real_age_mae_appa_real"] == pytest.approx(8.52)
-    assert MEASURED_ACCURACY["in_corpus_mae_utkface"] == pytest.approx(4.762)
-    assert (
-        MEASURED_ACCURACY["real_age_mae_appa_real"]
-        > MEASURED_ACCURACY["in_corpus_mae_utkface"]
-    )
-    assert "DEX" in MEASURED_ACCURACY["accuracy_note"]
 
-    # The recorded checkpoint figure is in-corpus too, and must never be the
-    # only MAE on offer.
-    info = TorchPredictor(str(checkpoint), detector=FakeDetector([])).describe_checkpoint()
-    assert "recorded_test_mae" in info
-    assert "accuracy_note" in info
+def test_real_gt_model_publishes_no_invented_in_corpus_figure():
+    """The real-GT model never saw UTKFace, so it has no in-corpus figure.
+
+    Filling that field for it -- by carrying the other model's 4.762 across, or
+    by relabelling its own real-age number -- would manufacture a result that
+    was never measured. Absent means absent.
+    """
+    realgt = MEASURED_ACCURACY_BY_DIGEST["fb629f49987a"]
+    assert realgt["in_corpus_mae_utkface"] is None
+    assert realgt["real_age_mae"] == pytest.approx(6.34, abs=0.05)
+    # The two models' real-age figures are NOT interchangeable.
+    assert realgt["real_age_mae"] < MEASURED_ACCURACY_BY_DIGEST["56894c480044"]["real_age_mae"]
 
 
 def test_accuracy_figures_are_withheld_for_an_unmeasured_checkpoint(checkpoint):
     """Accuracy belongs to a set of weights, not to "the model".
 
-    Our 4.762/8.52 figures were measured on one specific artifact. Sibling
-    checkpoints exist (a real-ground-truth retrain, and no-smoothing variants),
-    and pointing AGE_MODEL_PATH at one to evaluate it must not make /health
-    report another model's accuracy as though it were measured. Fails closed.
+    Our figures were measured on specific artifacts. Sibling checkpoints exist
+    (no-smoothing and CE variants), and pointing AGE_MODEL_PATH at one to
+    evaluate it must not make /health report another model's accuracy as though
+    it were measured. Fails closed.
     """
     predictor = TorchPredictor(str(checkpoint), detector=FakeDetector([]))
     info = predictor.describe_checkpoint()
 
-    assert info["sha256"] != MEASURED_DIGEST
+    assert info["sha256"] not in MEASURED_ACCURACY_BY_DIGEST
     assert info["in_corpus_mae_utkface"] is None
-    assert info["real_age_mae_appa_real"] is None
+    assert info["real_age_mae"] is None
     assert "Unmeasured" in info["accuracy_note"]
-    # The identity of the artifact we *did* measure stays discoverable, so the
-    # mismatch can be diagnosed rather than merely observed.
-    assert MEASURED_DIGEST in info["accuracy_note"]
+    # The artifacts we *did* measure stay discoverable, so the mismatch can be
+    # diagnosed rather than merely observed.
+    for digest in MEASURED_ACCURACY_BY_DIGEST:
+        assert digest in info["accuracy_note"]
 
 
 def test_declared_decode_is_honoured_not_silently_ignored(tmp_path, caplog):
@@ -434,3 +439,36 @@ def test_corpus_and_label_semantics_travel_with_the_number(tmp_path):
 
     assert "AgeDB" in info["recorded_test_mae_corpus"]
     assert info["label_semantics"] == "real chronological age"
+
+
+def test_explicit_model_path_wins_over_candidates(tmp_path, monkeypatch):
+    """An operator's explicit AGE_MODEL_PATH must never be second-guessed."""
+    target = tmp_path / "chosen.pt"
+    target.write_bytes(b"x")
+    monkeypatch.setenv("AGE_MODEL_PATH", str(target))
+    config.reload_from_env()
+    assert config.AGE_MODEL_PATH == str(target)
+
+
+def test_candidates_prefer_the_real_gt_model_then_fall_back(tmp_path, monkeypatch):
+    """Resolution order is real-GT first, then the older UTKFace model.
+
+    These are different models trained on different corpora with different
+    label semantics, not versions of one -- so the order is a deliberate choice
+    about which to serve, and the fallback exists so the app still serves real
+    weights rather than the stub if only the older artifact is present.
+    """
+    monkeypatch.delenv("AGE_MODEL_PATH", raising=False)
+    realgt = tmp_path / "age_model_realgt.pt"
+    older = tmp_path / "age_model.pt"
+    monkeypatch.setattr(
+        config, "MODEL_PATH_CANDIDATES", (str(realgt), str(older)), raising=False
+    )
+
+    older.write_bytes(b"x")
+    config.reload_from_env()
+    assert config.AGE_MODEL_PATH == str(older), "should fall back when real-GT absent"
+
+    realgt.write_bytes(b"x")
+    config.reload_from_env()
+    assert config.AGE_MODEL_PATH == str(realgt), "should prefer real-GT when present"

@@ -40,48 +40,69 @@ and the MAE the trainer claimed:
   "model": "mobilenetv3_small_100",
   "stub": false,
   "checkpoint": {
-    "path": "/abs/path/checkpoints/age_model.pt",
-    "sha256": "56894c480044",
-    "bytes": 6606539,
-    "recorded_test_mae": 5.5472,
-    "recorded_test_mae_decode": "expectation",
+    "path": "/abs/path/checkpoints/age_model_realgt.pt",
+    "sha256": "fb629f49987a",
+    "bytes": 6618465,
+    "recorded_test_mae": 6.393,
+    "recorded_test_mae_decode": "median",
     "serving_decode": "median",
-    "in_corpus_mae_utkface": 4.762,
-    "real_age_mae_appa_real": 8.52,
+    "recorded_test_mae_corpus": "real_ground_truth (AgeDB 16487 + APPA-REAL 7591 + FG-NET 1002)",
+    "label_semantics": "real chronological age",
+    "trained_crop_margin": 0.0,
+    "serving_crop_margin": 0.0,
+    "crop_margin_matches_training": true,
+    "real_age_mae": 6.34,
+    "real_age_corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3807",
+    "in_corpus_mae_utkface": null,
     "accuracy_note": "..."
   }
 }
 ```
 
-`recorded_test_mae` is the figure **the checkpoint records about itself**, not
-the accuracy of what this server returns. It was measured with the expectation
-decode; we serve the median decode, which measures 4.762 end to end. The field
-is named that way so the two can never be confused — do not relabel it
-`test_mae`.
+`recorded_test_mae` is the figure **the checkpoint records about itself**;
+`real_age_mae` is what we measured end to end through this server's own path.
+They agree here (6.393 vs 6.34) because both are against real chronological
+ages on the same split — the 0.05 gap is cv2-vs-PIL resizing and detector
+framing.
 
-> **Neither 5.5472 nor 4.762 is real-world accuracy.** Both are measured against
-> UTKFace labels, and those labels are themselves DEX-algorithm estimates — so
-> they measure *agreement with a labelling method*. Against real chronological
-> ages (APPA-REAL, 7,534 images) the MAE is **8.52**. `/health` serves both so
-> the distinction travels with the number instead of living only here. Anything
-> user-facing must quote 8.52.
+> **6.393 is NOT an improvement on the previous model's 5.5472.** They measure
+> different things. The old figure was agreement with UTKFace's DEX-estimated
+> *apparent* ages; this one is error against *real chronological* age. On a
+> like-for-like comparison — the same real-ground-truth held-out split — the
+> previous model scores **9.127** and this one **6.393**. Reading the two
+> recorded numbers side by side suggests a regression, and that is exactly
+> backwards. This is why `/health` publishes `recorded_test_mae_corpus` and
+> `label_semantics` next to the float, and why `in_corpus_mae_utkface` is
+> `null` here rather than being filled in with something plausible: this model
+> never saw UTKFace.
+
+**Quote ~6.3 years to users.**
 
 `sha256` is the first 12 hex chars of the digest of the file's bytes, so it is
 directly comparable with `shasum -a 256 <path> | cut -c1-12`.
 
-### The accuracy figures are pinned to one artifact
+### The accuracy figures are pinned to the artifact they were measured on
 
-`in_corpus_mae_utkface` and `real_age_mae_appa_real` are emitted **only** when
-the loaded checkpoint's `sha256` matches the artifact they were measured on
-(`56894c480044`). Any other checkpoint reports them as `null` with an
-`accuracy_note` saying so.
+`real_age_mae` and `in_corpus_mae_utkface` come from a table keyed by the
+loaded checkpoint's `sha256`. Two artifacts are in it:
 
-This matters because sibling artifacts exist — a real-ground-truth retrain and
-no-smoothing variants — and pointing `AGE_MODEL_PATH` at one to evaluate it
-would otherwise make `/health` report *this* model's accuracy for *that* model's
-weights. Accuracy is a property of a specific set of weights, not of "the
-model", so an unrecognised artifact fails closed rather than inheriting numbers
-it never earned. Re-run `server/tools/eval_end_to_end.py` to measure a new one.
+| sha256 | model | real-age MAE | in-corpus UTKFace MAE |
+| --- | --- | ---: | ---: |
+| `fb629f49987a` | real-GT (served) | **6.34** | `null` — never saw UTKFace |
+| `56894c480044` | UTKFace/DEX (fallback) | 8.52 | 4.762 |
+
+Any checkpoint not in the table reports `null` with an `accuracy_note` saying
+so. Sibling artifacts exist (no-smoothing and CE variants), and pointing
+`AGE_MODEL_PATH` at one to evaluate it must not make `/health` report another
+model's accuracy for those weights. Accuracy is a property of a specific set of
+weights, not of "the model", so an unrecognised artifact **fails closed** rather
+than inheriting numbers it never earned. Re-run
+`server/tools/eval_end_to_end.py` to measure a new one, then add it to the table.
+
+`in_corpus_mae_utkface` is `null` for the real-GT model rather than being filled
+with something plausible. It never trained on or was evaluated against UTKFace,
+so carrying the other model's 4.762 across — or relabelling its real-age figure
+— would manufacture a result that was never measured. Absent means absent.
 
 ### `serving_decode` follows the checkpoint
 
@@ -180,8 +201,8 @@ The margin used is echoed in the `X-Crop-Margin` response header.
 
 ## The model contract
 
-`checkpoints/age_model.pt` (produced by the `ml/` side of the project) is a
-`torch.save` dict:
+`checkpoints/age_model_realgt.pt` (produced by the `ml/` side of the project)
+is a `torch.save` dict:
 
 ```python
 {
@@ -192,10 +213,26 @@ The margin used is echoed in the `X-Crop-Margin` response header.
     "input_size": 224,
     "mean": [0.485, 0.456, 0.406],
     "std":  [0.229, 0.224, 0.225],
-    "test_mae": 5.43,
+    "decode": "median",         # honoured, not assumed — see below
+    "crop_margin": 0.0,         # checked against ours at load
+    "test_mae": 6.393,
+    "corpus": "real_ground_truth (AgeDB + APPA-REAL + FG-NET)",
+    "label_semantics": "real chronological age",
   },
 }
 ```
+
+### Which checkpoint gets loaded
+
+`AGE_MODEL_PATH`, if set, wins outright and is never second-guessed. With it
+unset the server tries, in order:
+
+1. `checkpoints/age_model_realgt.pt` — the served model
+2. `checkpoints/age_model.pt` — the older UTKFace/DEX model, kept as a fallback
+3. the stub, with a loud startup banner
+
+The fallback is ordering only; it never silently substitutes accuracy figures,
+because those are keyed by digest (above).
 
 The head is a distribution over ages 0..100. The server decodes it by
 **quantile**, not by expectation:
@@ -208,29 +245,47 @@ confidence = 1 / (1 + (high − low) / 12)
 
 ### Why the median and not the mean
 
-The checkpoint was trained with `label_smoothing=0.1`, which trains a uniform
-pedestal across all 101 bins. That pedestal's own expectation is exactly 50, so
-decoding by expectation returns roughly `0.9 · age + 5` — it drags every
-estimate toward the middle of the range. The median ignores the pedestal.
+The served decode is read from `meta["decode"]`, not assumed. It is `median`
+for both artifacts on disk, but for **different reasons**, and that distinction
+is the point of the key existing.
 
-Measured end to end over the 1,184-image UTKFace test set at `CROP_MARGIN = 0.0`
-— these are **in-corpus** figures, see the accuracy section below:
+*The old UTKFace model* was trained with `label_smoothing=0.1`, which trains a
+uniform pedestal across all 101 bins. That pedestal's own expectation is exactly
+50, so decoding by expectation returns roughly `0.9 · age + 5` — dragging every
+estimate toward the middle. The median ignores the pedestal. In-corpus, median
+beat expectation 4.762 vs 5.477 MAE.
 
-| decode | MAE | CS@5 | bias | 85-year-old displays as |
-|---|---|---|---|---|
-| soft expectation | 5.477 | 55.5% | +2.11 | ~68 |
-| **median (shipped)** | **4.762** | **69.0%** | **+0.17** | **~78** |
+The ML side later demonstrated that mechanism causally: with the pedestal
+removed the sign **flips** and expectation wins (−0.122), and expectation-decode
+bias collapses monotonically as smoothing goes away
+(+3.835 → +1.400 → −0.379 → +0.002). `test_median_decode_ignores_a_label_smoothing_pedestal`
+in `tests/test_preprocessing.py` pins that mechanism and should stay.
 
-The decode change itself was validated in-corpus only; there is no
-expectation-decode run against real ages, so the 0.7-year win is measured
-against DEX-derived labels and its true magnitude is unconfirmed.
+*The served real-GT model* has **no label smoothing** — it uses a DLDL Gaussian
+soft target (σ = 2.5). So the pedestal argument does not apply to it. Under
+DLDL the two decodes tie on MAE (6.390 expectation vs 6.393 median — noise), and
+median is kept on a different basis: **+4.1pp CS@5** (56.2% vs 52.1%),
+reproduced on validation.
+
+The durable warning: if a future artifact drops smoothing and nobody re-examines
+the decode, median silently leaves accuracy on the table. That is why we read
+`meta["decode"]` rather than hardcoding. A checkpoint that declares a different
+decode gets it, with a loud log line if it disagrees with our default.
 
 The interval is built from true CDF quantiles rather than `age ± σ`. σ is
 computed about the *mean*, so pairing it with a median point estimate would be
-subtly inconsistent, and σ is itself inflated by the same pedestal — it averaged
-12.7 years, which is why confidence used to read low on every face. The quantile
-interval averages 11.8 years wide and achieves 75% empirical coverage against a
-68% nominal target.
+subtly inconsistent.
+
+**Interval coverage is 60.8% against a 68% nominal target** on the served model
+— the interval is slightly too narrow. This is a reversal: on the old model the
+same construction measured 75% (too wide, i.e. conservative), because that
+model's σ was inflated by the label-smoothing pedestal. The new model's
+distributions are genuinely sharper, and the quantiles are now mildly
+overconfident instead.
+
+It is deliberately **not** retuned. Widening the quantiles until coverage hit
+68% on the test split would be fitting to the evaluation set. It is documented
+instead, and the interval is advanced-panel-only.
 
 `Decoded` retains the expectation and σ alongside the shipped median so the two
 decodes stay comparable on the same weights without another inference pass.
@@ -343,7 +398,7 @@ All via environment variables, re-read at startup.
 
 | Variable                 | Default                      | Meaning |
 | ------------------------ | ---------------------------- | ------- |
-| `AGE_MODEL_PATH`         | `checkpoints/age_model.pt`   | Checkpoint to load; stub if absent |
+| `AGE_MODEL_PATH`         | first existing of `age_model_realgt.pt`, `age_model.pt` | Checkpoint to load; stub if absent |
 | `CROP_MARGIN`            | `0.0`                        | Face crop margin (fraction of box side) |
 | `INPUT_SIZE`             | `224`                        | Model input resolution |
 | `NUM_BINS`               | `101`                        | Age bins in the DEX head |
@@ -387,7 +442,7 @@ or directly:
 ```bash
 .venv/bin/python -m server.tools.eval_end_to_end \
     --csv ml/splits/test.csv \
-    --checkpoint checkpoints/age_model.pt \
+    --checkpoint checkpoints/age_model_realgt.pt \
     --margins 0 0.0135 0.05 0.1 \
     --save-crops /tmp/crops \
     --json /tmp/report.json

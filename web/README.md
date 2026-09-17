@@ -70,97 +70,120 @@ Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
 
 ### Not usable for age verification
 
-**About 40% of people under 18 are displayed as 18 or over.** Measured on the
-real-ground-truth test split (AgeDB + APPA-REAL + FG-NET, n = 3,818, real
-chronological ages) using the weights this app serves:
+**About 30% of people under 18 are displayed as 18 or over.** Measured end to
+end through this app's own path (YuNet detect → our crop → model → median
+decode) on the real-ground-truth held-out test split (AgeDB + APPA-REAL +
+FG-NET, n = 3,807, real chronological ages):
 
 | threshold | true minors shown as adult | shown-adult who are minors |
 | ---: | ---: | ---: |
-| 13 | 24.9% | 2.2% |
-| 16 | 32.4% | 3.5% |
-| **18** | **40.3%** | **5.5%** |
-| 21 | 46.8% | 8.8% |
+| 13 | 19.2% | 1.7% |
+| 16 | 26.0% | 2.9% |
+| **18** | **29.6%** | **4.1%** |
+| 21 | 33.9% | 6.5% |
 
 The two columns answer different questions and **diverge by roughly 7×** at the
 18 threshold. The right-hand column is the one you can observe without knowing
-true ages — it makes the gate look 94.5% correct. The left-hand column is the
-one that matters if a gate is protecting a minor, and it is catastrophically
-worse. The difference is pure base rate: adults outnumber minors in the corpus,
-so most predictions above the line really are adults, while the minors who slip
-through are a large fraction of a small group.
+true ages — it makes the gate look 96% correct. The left-hand column is the one
+that matters if a gate is protecting a minor. The difference is pure base rate:
+adults outnumber minors, so most predictions above the line really are adults,
+while the minors who slip through are a large fraction of a small group.
 
-This is the same true-versus-predicted conditioning trap that runs through this
-project, in its highest-consequence form. The UI states the limitation in the
-header rather than burying it here.
+This improved with the real-ground-truth model (was 40.3%) and is still far too
+high to gate on. It is the same true-versus-predicted conditioning trap that
+runs through this project, in its highest-consequence form — and note that here
+the *observable* number is the reassuring one, which is the configuration least
+likely to prompt anyone to look harder. The UI states the limitation in the
+page header rather than burying it here.
 
 ### Accuracy — the number that matters
 
-**Against real chronological ages the MAE is 8.52 years** (APPA-REAL, 7,534
-images, real ages, YuNet on full original scenes).
+**Against real chronological ages the MAE is ~6.3 years**, measured end to end
+through this app's path on the held-out real-GT test split (n = 3,807).
 
-The in-corpus figure of 4.76 on UTKFace is *not* accuracy. UTKFace's labels are
-DEX-algorithm estimates, so that number measures agreement with a labelling
-method. Quote 8.52 to users.
+The model is trained on real chronological ages (AgeDB + APPA-REAL + FG-NET).
+It has no UTKFace in-corpus figure, and none should be invented for it.
 
-The gap is not a cropping problem — framing accounts for only ~0.4 years of it.
-The revealing part is the slopes: **0.935** against *apparent* age versus
-**0.817** against *real* age. We are a well-calibrated predictor of how old a
-face **looks** and a compressed predictor of how old someone **is**. Our
-per-image error also correlates **+0.445** with the human apparent-vs-real gap —
-when people misjudge a face, we misjudge it the same way, and in the same
-direction.
+> **Do not compare 6.393 against the previous model's 5.5472.** Those measure
+> different things — agreement with DEX-estimated *apparent* age versus error
+> against *real* age. Like-for-like on the same real-GT split, the previous
+> model scores **9.127** and this one **6.393**. The bare floats suggest a
+> regression; the truth is a 2.7-year improvement.
+
+Residual compression is real and not a labelling artefact: the fitted slope is
+**0.808**, up from 0.744, but still well short of 1.0 after removing DEX labels
+from training entirely. Extremes are still pulled toward the middle.
 
 ### Where the estimate is least reliable
 
-Thresholds and wording are conditioned on the **predicted** age, because that is
-the only thing the UI knows. Binning by *true* age answers a question the UI
-cannot ask. This distinction has now inverted a conclusion twice, so check it
+**No band caveat currently ships.** `tailCaveat()` returns `null`. The plumbing
+is kept on purpose — see the end of this section.
+
+Thresholds must be conditioned on the **predicted** age, because that is the
+only thing the UI knows. Binning by *true* age answers a question the UI cannot
+ask. This has inverted a conclusion three times in this project, so check it
 first before changing anything here.
 
-Binned by displayed age (APPA-REAL, n = 7,534):
+Re-measured end to end on the real-GT held-out test split (n = 3,807):
 
-| shown | n | MAE | bias |
-| ----: | -: | --: | ---: |
-| 0–10 | 617 | 3.34 | −1.01 |
-| 10–20 | 1126 | 6.77 | −4.43 |
-| 20–30 | 1897 | 6.34 | +0.00 |
-| 30–40 | 1377 | 8.04 | +3.04 |
-| 40–50 | 651 | 10.27 | +6.78 |
-| 50–60 | 1198 | 13.72 | +10.94 |
-| 60–70 | 467 | 12.48 | +7.76 |
-| 70+ | 201 | 12.22 | +7.30 |
+| shown | n | MAE | bias | CS@5 |
+| ----: | -: | --: | ---: | ---: |
+| 0–10 | 225 | 2.15 | −0.34 | 95.1% |
+| 10–18 | 159 | 4.72 | −1.90 | 75.5% |
+| 18–25 | 353 | 5.66 | −1.72 | 61.2% |
+| 25–40 | 1527 | 6.20 | −0.15 | 55.7% |
+| 40–50 | 595 | 7.30 | +1.14 | 51.4% |
+| 50–60 | 448 | 7.70 | −0.16 | 47.5% |
+| 60–70 | 280 | 7.33 | −0.51 | 48.6% |
+| 70+ | 220 | 7.35 | −0.23 | 46.8% |
 
-**One caveat ships: ages shown 40 and over.** MAE 12.48 against 6.53 below 40,
-with bias **+8.98** — so the number is both about twice as imprecise and
-systematically high. Someone displayed as 55 averages 46. It fires on 33% of
-faces, which is a lot, but the effect is large, monotonic in displayed age, and
-stable across APPA-REAL's splits (+8.75 / +9.14 / +9.07). Independently
-corroborated on FG-NET (same direction, same shape).
+**Why the old "shown 40+ reads high" caveat was removed.** It was correct and
+well corroborated *for the previous model*. Bias is now near zero in every band.
+The old model split +5.70 above 40 against −0.55 below — 6.25 years. The largest
+equivalent split now available at **any** threshold is 1.52 years (at 30), and
+just 0.80 at 40. There is no direction left to warn about, and carrying the old
+warning across would fire it on predictions that are approximately unbiased.
 
-Two warnings are deliberately **not** shipped:
+**Why no precision caveat replaced it.** Precision does still degrade with
+displayed age (MAE 5.60 below 40 vs 7.43 above, ratio 1.33). That was the
+obvious replacement and it was rejected on measurement: the **confidence bar
+already carries this signal, per face, and better than a band could**.
 
-* **No teenager caveat.** By *true* age, 10–19 is our worst region relative to
-  human raters (bias +7.42 — we read teenagers as much older than they are).
-  But by *displayed* age the sign flips: those shown as 10–20 average bias
-  **−4.43**. A "teenagers read old" warning would fire on a population for whom
-  the opposite is true. The band is also *more* accurate than average (MAE 6.77
-  vs 8.52), so there is no precision case either, and the dip is non-monotonic
-  against its neighbours (−1.01, −4.43, +0.00) — the signature of a local
-  artefact rather than a stable effect.
-* **No old-age caveat.** At true 70–79 our MAE is 10.08 against a single human
-  rater's 10.01, and our bias (−7.12) is *smaller* than the human crowd's own
-  (−7.99). Those faces genuinely read young to people. Not our defect.
+| confidence quartile | Q1 | Q2 | Q3 | Q4 |
+| --- | ---: | ---: | ---: | ---: |
+| MAE | 8.86 | 6.46 | 5.84 | 4.21 |
 
-`tailCaveat()` in `src/overlay.ts` adds a short flag to the box label and a
-fuller explanation to the face card, both folded into the box's `aria-label` so
-the warning is not purely visual.
+Pearson *r*(confidence, |error|) = **−0.343**, and mean confidence already
+tracks the displayed-age drop (0.596 → 0.485 as MAE goes 4.37 → 7.47). A band
+caveat would restate a continuous per-face signal as a step function, and would
+be wrong for the many high-confidence faces above 40.
 
-The estimate is **not corrected**. Subtracting the bias would bury a known,
+**Why the plumbing is kept.** The correct caveat has changed three times, twice
+reversing direction, and each time the trap was re-deriving from true-age bins.
+Keeping the derivation and the negative result means the next person starts from
+the evidence. The standard to clear is explicit: a caveat ships only if it is
+supportable on **displayed** age, on the **weights actually served**, and is not
+already better conveyed by the confidence bar.
+
+The estimate is **not corrected**. Subtracting a bias would bury a known,
 measured limitation inside a number that looks authoritative.
 
-For context on why a single number is shown at all: the reported interval
-averages 11.8 years wide. The product decision is to lead with one number; the
-range remains in the API response and under the advanced panel.
+#### Interval calibration — known and slightly optimistic
+
+The `low`–`high` interval is the 16th/84th percentile of the predicted
+distribution, so it is **nominally 68%**. Measured coverage on this model is
+**60.8%** — the interval is slightly too narrow.
+
+This is a change of direction worth knowing: on the previous model the same
+construction measured 75% (too *wide*, i.e. conservative). It is now mildly
+overconfident instead.
+
+It has deliberately **not** been retuned. Widening the quantiles until coverage
+hit 68% on the test split would be fitting to the evaluation set — the exact
+self-flattering move this project has criticised elsewhere. It is documented
+instead. The interval is advanced-panel-only, so the user-facing impact is
+limited to the confidence bar, which remains monotonic in interval width and
+demonstrably informative (see the quartile table above).
 
 ### UI states
 
@@ -174,7 +197,6 @@ range remains in the API response and under the advanced panel.
 | Server error / unreachable | The server's `detail` message, or a "start the API" hint |
 | Invalid crop margin | The server rejects it with 422 and the message is surfaced |
 | Stub model | A banner from `GET /health` warning that the ages are fake |
-| Age shown 40+ | A caveat: reads high by ~9 years and is ~2x less precise |
 
 ## Mirroring — the easy bug
 

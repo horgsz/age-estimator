@@ -50,111 +50,92 @@ export function formatRange(face: FaceResult): string {
 }
 
 /**
- * Ages where the displayed number is least reliable, and the app says so.
+ * Ages where the displayed number is least reliable.
  *
- * Thresholds and wording are conditioned on the *predicted* age, because that
- * is the only thing the UI knows. Binning by true age answers a question the UI
- * cannot ask. This distinction has now inverted a conclusion three times, so it
- * is the first thing to check before changing anything here.
+ * CURRENTLY: no caveat is shipped. `tailCaveat` always returns null. The
+ * plumbing is kept deliberately -- see "why this is kept" at the end.
  *
- * CORROBORATED on a second, independent corpus. The bands below come from
- * APPA-REAL; the ml/ side later produced per-sample predictions over the whole
- * real-ground-truth test split (AgeDB + APPA-REAL + FG-NET, n = 3,818, real
- * chronological ages). Re-binning those by displayed age reproduces the shape:
+ * Thresholds and wording must be conditioned on the *predicted* age, because
+ * that is the only thing the UI knows. Binning by true age answers a question
+ * the UI cannot ask. This distinction has inverted a conclusion three times in
+ * this project, so it is the first thing to check before changing anything here.
  *
- *   shown <40   n=1966   MAE  6.78   bias −0.55
- *   shown >=40  n=1852   MAE 11.62   bias +5.70
+ * WHY THE OLD ">= 40 reads high" CAVEAT WAS REMOVED
  *
- * Same direction, same threshold, on a different corpus with different
- * subjects. The bias magnitude is smaller than APPA-REAL's +8.98, so the
- * *existence* of the effect is well established while its exact size is
- * corpus-dependent -- which is why the copy says "tends to read high" and
- * quotes no number.
+ * It was correct, and well corroborated, for the previous model (trained on
+ * UTKFace's DEX-estimated labels). It is not correct for the model now served,
+ * which is trained on real chronological ages. Re-measured end to end through
+ * this server's own path (YuNet -> our crop -> model -> median decode) over the
+ * real-ground-truth held-out test split (AgeDB + APPA-REAL + FG-NET, n = 3,807):
  *
- * That re-binning is also why the threshold has NOT been moved to match the
- * newer real-GT model, whose displayed-age bias is near zero everywhere. That
- * model is not what this app serves. Thresholds must be derived from the
- * weights actually loaded, exactly as the /health accuracy figures are.
+ *   shown     n     MAE    bias    CS@5
+ *    0-10   225    2.15   -0.34   95.1%
+ *   10-18   159    4.72   -1.90   75.5%
+ *   18-25   353    5.66   -1.72   61.2%
+ *   25-40  1527    6.20   -0.15   55.7%
+ *   40-50   595    7.30   +1.14   51.4%
+ *   50-60   448    7.70   -0.16   47.5%
+ *   60-70   280    7.33   -0.51   48.6%
+ *     70+   220    7.35   -0.23   46.8%
  *
- * These numbers come from APPA-REAL (7,534 images, real chronological ages,
- * YuNet on full original scenes) rather than from UTKFace. UTKFace's labels are
- * DEX-algorithm estimates, so our in-corpus MAE of 4.76 is substantially
- * agreement with the labelling method rather than accuracy against real age.
- * Against real ages the MAE is 8.52. Caveats must be derived from the latter --
- * the in-corpus numbers understate the error a user actually experiences.
+ * Bias is near zero in every band (-2.56 to +1.14 across finer bins). The
+ * previous model showed +5.70 above 40 against -0.55 below it -- a 6.25-year
+ * split. The largest equivalent split now available at ANY threshold is 1.52
+ * years, at 30, and only 0.80 at 40. There is no direction left to warn about,
+ * and a directional warning derived from the old weights would now fire on
+ * predictions that are approximately unbiased.
  *
- * Binned by DISPLAYED age (n = 7,534, margin 0.0, median decode):
+ * WHY NO PRECISION CAVEAT REPLACED IT
  *
- *   shown     n     MAE    bias
- *   0–10    617    3.34   −1.01
- *   10–20  1126    6.77   −4.43
- *   20–30  1897    6.34   +0.00
- *   30–40  1377    8.04   +3.04
- *   40–50   651   10.27   +6.78
- *   50–60  1198   13.72  +10.94
- *   60–70   467   12.48   +7.76
- *   70+     201   12.22   +7.30
+ * Precision does still degrade with displayed age (MAE 5.60 below 40 vs 7.43
+ * above, a 1.33x ratio). That was the obvious candidate replacement, and it was
+ * rejected on measurement: the confidence bar already carries this signal, per
+ * face, and carries it better than a band threshold could.
  *
- * One caveat ships, for ages shown 40 and over: MAE 12.48 against 6.53 below
- * 40, with bias +8.98. So the number is both about twice as imprecise and
- * systematically high -- someone displayed as 55 averages 46. It fires on 33%
- * of faces, which is a lot, but the effect is large, monotonic in displayed age
- * and stable across APPA-REAL's splits (+8.75 / +9.14 / +9.07).
+ *   confidence quartile:   Q1 8.86   Q2 6.46   Q3 5.84   Q4 4.21   (MAE)
+ *   Pearson r(confidence, |error|) = -0.343
  *
- * Two warnings that are NOT shipped, both because re-conditioning on displayed
- * age reversed or dissolved them:
+ * and it already tracks the displayed-age drop that a band caveat would state:
  *
- * 1. No teenager caveat. Binned by *true* age, 10–19 is our worst region
- *    relative to human raters: bias +7.42, i.e. we read teenagers as much
- *    older than they are. But binned by *displayed* age the sign flips --
- *    those shown as 10–20 average bias −4.43, i.e. they are older than shown.
- *    A warning saying "teenagers read old" would fire on a population for whom
- *    the opposite is true. The band is also more accurate than average
- *    (MAE 6.77 vs 8.52 overall), so there is no precision case either, and the
- *    dip is non-monotonic against its neighbours (−1.01, −4.43, +0.00), which
- *    is the signature of a local artefact rather than a stable effect.
+ *   shown  0-25  mean confidence 0.596   MAE 4.37
+ *   shown 25-40  mean confidence 0.514   MAE 6.20
+ *   shown 40-60  mean confidence 0.485   MAE 7.47
+ *   shown  60+   mean confidence 0.507   MAE 7.34
  *
- * 2. No old-age caveat. Previously removed on UTKFace evidence; APPA-REAL
- *    confirms it. At true 70–79 our MAE is 10.08 against a single human
- *    rater's 10.01, and our bias (−7.12) is smaller than the human crowd's own
- *    (−7.99). Those faces genuinely read young to people; the labels encode
- *    that and we reproduce it. It is not a defect to warn about.
+ * A band caveat would restate a continuous per-face signal as a step function,
+ * and would be wrong for the many high-confidence faces above 40. Shipping it
+ * would add noise, not information.
  *
- * Independently corroborated on FG-NET (998 images, real ages, never used to
- * derive any of the above): shown ≥ 40 has MAE 17.28 and bias +16.55 against
- * 5.57 / +4.24 below 40 — same direction, same shape. Its magnitude is not
- * quoted anywhere, because FG-NET's median true age is 13 and only 7% of it is
- * genuinely over 40, so a high prediction there is near-certainly wrong and the
- * effect is inflated. It is corroboration of direction, not of size. Every
- * number the UI states comes from APPA-REAL, which is 27% over-40.
+ * WHAT IS STILL TRUE AND IS STATED ELSEWHERE
  *
- * The estimate is never silently corrected. Subtracting the bias would bury a
+ * Overall error is still large in absolute terms (~6.3 years against real age),
+ * and the model still cannot be used for age verification -- about 30% of true
+ * under-18s display as 18 or over. Both are in the page header, because they
+ * apply to every face rather than to a band.
+ *
+ * WHY THIS IS KEPT RATHER THAN DELETED
+ *
+ * The correct caveat has now changed three times, twice reversing direction,
+ * and each time the trap was re-deriving from true-age bins. Keeping the
+ * derivation and the negative result means the next person starts from the
+ * evidence rather than from scratch -- and the standard to clear is stated: a
+ * caveat ships only if it is supportable on DISPLAYED age, on the weights
+ * actually served, and is not already better conveyed by the confidence bar.
+ *
+ * The estimate is never silently corrected. Subtracting a bias would bury a
  * known, measured limitation inside a number that looks authoritative.
  */
-const MID_LOW = 40;
-
 export interface TailCaveat {
   kind: 'mid';
   short: string;
   long: string;
 }
 
-export function tailCaveat(age: number): TailCaveat | null {
-  if (age >= MID_LOW) {
-    return {
-      kind: 'mid',
-      short: 'often reads high — likely younger',
-      long:
-        'From about 40 upwards this model tends to overestimate, by roughly 9 ' +
-        'years on average, and it is about twice as imprecise here as it is ' +
-        'with younger faces. The person is more likely younger than the number ' +
-        'suggests than older. Treat it as a broad bracket, not a reading.',
-    };
-  }
+export function tailCaveat(_age: number): TailCaveat | null {
   return null;
 }
 
-/** Hue from red (uncertain) to green (confident). */
+/** Confidence ramp: red (uncertain) to green (confident). */
 function confidenceColor(confidence: number): string {
   const hue = Math.round(Math.max(0, Math.min(1, confidence)) * 120);
   return `hsl(${hue} 85% 55%)`;

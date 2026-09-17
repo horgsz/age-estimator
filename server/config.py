@@ -28,7 +28,20 @@ from pathlib import Path
 SERVER_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SERVER_DIR.parent
 
-DEFAULT_MODEL_PATH = str(REPO_ROOT / "checkpoints" / "age_model.pt")
+DEFAULT_MODEL_PATH = str(REPO_ROOT / "checkpoints" / "age_model_realgt.pt")
+
+# Tried in order when AGE_MODEL_PATH is not set explicitly. The real-GT model is
+# preferred; the original UTKFace/DEX model is kept as a fallback so the app
+# still serves real weights if only the older artifact is present.
+#
+# These are DISTINCT MODELS, not versions of one -- different corpora, different
+# label semantics, and different accuracy. Whichever loads, /health reports the
+# figures measured on that specific artifact and nothing else (see
+# predictor.MEASURED_ACCURACY_BY_DIGEST).
+MODEL_PATH_CANDIDATES = (
+    DEFAULT_MODEL_PATH,
+    str(REPO_ROOT / "checkpoints" / "age_model.pt"),
+)
 
 # The margin between the YuNet detection box and the square we feed the model.
 #
@@ -142,8 +155,17 @@ def reload_from_env() -> None:
     global CORS_ORIGINS
 
     # Path to the trained checkpoint produced by the `ml/` side of the project.
-    # When missing, the server falls back to the deterministic StubPredictor.
-    AGE_MODEL_PATH = _env_str("AGE_MODEL_PATH", DEFAULT_MODEL_PATH)
+    # An explicit AGE_MODEL_PATH always wins; otherwise the candidates are tried
+    # in order and the first that exists is used. When none exist the server
+    # falls back to the deterministic StubPredictor.
+    explicit = os.environ.get("AGE_MODEL_PATH", "").strip()
+    if explicit:
+        AGE_MODEL_PATH = explicit
+    else:
+        AGE_MODEL_PATH = next(
+            (p for p in MODEL_PATH_CANDIDATES if Path(p).exists()),
+            DEFAULT_MODEL_PATH,
+        )
 
     # Where the YuNet ONNX weights are cached (downloaded on first run).
     MODELS_DIR = Path(_env_str("SERVER_MODELS_DIR", str(SERVER_DIR / "models")))

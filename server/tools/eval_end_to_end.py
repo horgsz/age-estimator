@@ -384,8 +384,28 @@ def format_report(report: RunReport) -> str:
     add(f"model              : {report.model}{'  [STUB - ages are fake]' if report.stub else ''}")
     if report.checkpoint:
         ck = report.checkpoint
-        add(f"checkpoint         : sha256:{ck.get('sha256')}  claimed test MAE {ck.get('test_mae')}")
+        add(
+            f"checkpoint         : sha256:{ck.get('sha256')}  "
+            f"recorded MAE {ck.get('recorded_test_mae')} "
+            f"({ck.get('recorded_test_mae_decode')} decode)"
+        )
         add(f"                     {ck.get('path')}")
+        # A recorded MAE is meaningless without the corpus it was measured on:
+        # 5.5472 against DEX-estimated apparent age and 6.393 against real
+        # chronological age are not comparable, and the smaller is the weaker
+        # result. Print them together or not at all.
+        if ck.get("recorded_test_mae_corpus"):
+            add(f"                     corpus: {ck['recorded_test_mae_corpus']}")
+        if ck.get("label_semantics"):
+            add(f"                     labels: {ck['label_semantics']}")
+        if ck.get("role"):
+            add(f"                     ROLE: {ck['role']}")
+        if ck.get("crop_margin_matches_training") is False:
+            add(
+                f"                     WARNING: trained at crop_margin "
+                f"{ck.get('trained_crop_margin')}, serving "
+                f"{ck.get('serving_crop_margin')}"
+            )
     add(f"samples            : {report.total}")
     add(f"unreadable files   : {report.read_errors}")
     add(f"no face detected   : {report.no_detection}")
