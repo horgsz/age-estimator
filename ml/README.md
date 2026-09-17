@@ -1036,46 +1036,69 @@ rest was not; neither identifies what the rest is. AgeDB and FG-NET carry real
 ages only, so they cannot answer it. FG-NET additionally has **zero images above
 age 69**, so it is silent on precisely the band in question.
 
-### σ sets the uncertainty interval, not just the loss
+### σ controls interval *width* — a prediction, mostly refuted
 
-Discovered after publishing, from a regression the server session measured: the
-68%-nominal confidence interval covers **60.8%** under the real-GT model, down
-from 75% under the shipped one. It is the one metric that got *worse* in the
-swap, and the mechanism appears to be DLDL — which is to say, mine.
+This section previously argued that DLDL caused a coverage regression. **It was
+wrong, and the regression it explained did not exist.** The original claim is
+replaced rather than deleted, because the way it failed is more instructive than
+the claim was.
 
-DLDL trains every face toward a Gaussian of **fixed σ=2.5**, and KL penalises the
-predicted distribution being too *sharp* as well as too broad (verified
-numerically when the loss was built: KL rises as logits sharpen past the target).
-So the decoded distribution's width is no longer primarily an expression of
-per-face uncertainty — it is substantially anchored to a hyperparameter.
+**What I claimed.** The server session reported 68%-nominal interval coverage of
+60.8% under the real-GT model, down from 75% under the shipped one. I argued the
+cause was structural to DLDL: it trains every face toward a Gaussian of fixed
+σ=2.5, KL penalises sharpening past that target, so decoded width is anchored to
+a hyperparameter rather than expressing per-face uncertainty. The 0.16/0.84
+quantiles of `N(μ, 2.5)` span 5.0 years, which against MAE 6.39 must undercover.
 
-The 0.16/0.84 quantiles of `N(μ, 2.5)` span exactly ±1σ = **5.0 years**. Against
-an MAE of 6.39, an interval anchored near that width must undercover. Observed
-coverage is higher than a perfect σ=2.5 fit would give, so the model is hedging
-wider than its target on hard faces and real signal survives — but the anchor is
-pulling width down, and the interval's nominal 68% label is not trustworthy.
+I stated two disconfirming conditions in advance: widths should be *less
+dispersed* under DLDL, and width should correlate *less well* with `|error|`.
 
-**This is a falsifiable claim, not a conclusion.** If it holds, the real-GT
-model's interval widths should be markedly *less dispersed* across faces than the
-shipped model's, and width should correlate less well with `|error|`. If widths
-are just as dispersed and just as predictive, the explanation is ordinary
-miscalibration and this account is wrong.
+**What the measurement showed.** The server re-ran the shipped checkpoint on the
+**same real-GT split, same harness, same crop** (MAE 9.110 vs 9.127 — control
+passes), which is the comparison that had never been made:
 
-Note the *ranking* signal is intact either way — the server measured
-`r(confidence, |error|) = −0.343` with MAE by confidence quartile
-8.86 / 6.46 / 5.84 / 4.21. What would be unreliable is the interval's absolute
-width, not its ordering.
+| model | MAE | coverage | mean width | sd width | r(width, \|err\|) |
+|---|---:|---:|---:|---:|---:|
+| shipped | 9.110 | **61.7%** | 20.61 | 12.92 | +0.309 |
+| realgt DLDL | 6.343 | **60.8%** | 11.62 | 4.22 | +0.364 |
 
-**Consequence for the queued σ sweep: it must report coverage alongside MAE.**
-The two objectives can conflict — a smaller σ may lower MAE while degrading
-calibration further — so a sweep optimising MAE alone would improve the headline
-number and silently worsen a metric nothing else checks. That is the same failure
-this document keeps recording in different forms.
+- **Dispersion: confirmed.** sd 12.92 → 4.22, IQR 14 → 4, p5–p95 span 42 → 12
+  years. Widths really are clustered under DLDL, predictable from the loss alone.
+- **Predictiveness: refuted**, by the condition I set. r went +0.309 → **+0.364**
+  — stronger, not weaker. Clustering cost no ranking power.
+- **The σ=2.5 anchor: refuted on magnitude.** ±1σ is 5.0 years; observed mean
+  width is 11.62, and only 3.1% of faces sit at or below 5.0. KL permits far more
+  hedging than the target σ, so the mass is not where the mechanism required.
 
-The right response was *not* to widen the quantiles until coverage reached 68%.
-That fits the evaluation set and yields a number that looks calibrated and
-generalises nowhere. The server declined to do it and documented the regression
-instead, which is correct regardless of which explanation turns out to hold.
+**And the regression was not real.** The 75% figure came from the *UTKFace*
+split; the 60.8% from the *real-GT* split. Two variables changed at once. On a
+common corpus the two models differ by **0.9pp** (61.7% vs 60.8%) — the shipped
+model undercovers by the same ~7pp. The drop was the corpus, not the model.
+
+**What DLDL actually did to the interval:** equal coverage at **44% narrower**
+width, with width slightly *more* correlated with error. That is a strictly
+better interval, and it had been filed as a degradation.
+
+The ~7pp shortfall against the nominal 68% is real but belongs to **both**
+models, making it the one derived number in this system that is *not* per-model —
+after every other number turned out to be. Quantiles remain un-retuned; that
+reasoning is firmer now that there is nothing model-specific to chase.
+
+**Consequence for the queued σ sweep**, sharpened by the result: report **width
+and coverage as separate columns**, not coverage alone. σ demonstrably controls
+width (20.6 → 11.6 is a large real effect) while moving coverage by 0.9pp — the
+two decoupled. A sweep watching only coverage would read a halved interval as
+"no effect" and miss the improvement entirely. The double duty is real; the
+second duty is width, not calibration.
+
+**Why this section is worth keeping.** The mechanism was plausible, internally
+consistent, derived from a property of the loss I had verified numerically — and
+it was constructed to explain a comparison that was never valid. A structural
+explanation for an artifact is harder to dislodge than a wrong number, because it
+*predicts* the artifact. The falsification conditions are what made it cheap to
+retire; without them it would have been an unfalsifiable story that happened to
+fit. State the disconfirming evidence in advance, and check the baseline before
+explaining the delta.
 
 ### What this does not show
 
@@ -1086,8 +1109,10 @@ instead, which is correct regardless of which explanation turns out to hold.
   questions on two different corpora.
 - **σ=2.5 was not tuned, and it does more than one job.** It was the midpoint of
   a suggested range and the first value tried, so the DLDL result may improve or
-  may be partly luck. More importantly, σ sets the **width of the predicted
-  distribution**, not just the shape of the training target — see below.
+  may be partly luck. σ also controls the **width of the predicted distribution**
+  (measured: mean width 20.6 → 11.6 vs the shipped model) without materially
+  moving coverage — so a sweep must report width and coverage separately. See
+  the section above.
 - **One seed per variant.** The CE-vs-DLDL gap (6.850 vs 6.393) is large enough
   to be believable; the expectation-vs-median gaps near zero are within what a
   seed change could plausibly move. The *sign flip* across smoothing levels
