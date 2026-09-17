@@ -335,6 +335,13 @@ It is deliberately **not** retuned. Widening the quantiles until coverage hit
 68% on the test split would be fitting to the evaluation set. It is documented
 instead, and the interval is advanced-panel-only.
 
+`/health` reports this as `interval_calibration`, a **sibling** of `models`
+rather than a field inside each entry. The placement is the claim: everything
+else derived here is per-checkpoint, and nesting this one per model would imply
+a difference the 0.9pp measurement does not support. It is withheld entirely
+when the stub is serving, whose intervals are synthetic. Two tests pin the
+scope so it cannot drift back.
+
 `Decoded` retains the expectation and σ alongside the shipped median so the two
 decodes stay comparable on the same weights without another inference pass.
 

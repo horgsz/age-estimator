@@ -59,6 +59,36 @@ MAX_AGE = 100.0
 # which matters because these distributions are visibly skewed at the tails.
 LOW_Q, HIGH_Q = 0.16, 0.84
 
+# Measured calibration of that interval. This is deliberately NOT keyed by
+# checkpoint digest, unlike every accuracy figure below, because it measurably
+# is not a per-model property: on the same held-out split (n=3,807) the two
+# served checkpoints cover 61.7% and 60.8% against a 68% nominal target -- a
+# 0.9pp difference. The shortfall belongs to this quantile construction on this
+# corpus, not to either set of weights.
+#
+# It was briefly reported as a regression in the real-age model, by comparing
+# 75% measured on UTKFace against 60.8% measured on real ground truth. That
+# comparison changed corpus and weights at once. Keeping the number here, at
+# module scope rather than in the per-digest table, is what stops the next
+# person duplicating it per model and re-creating the impression that the
+# models differ on it.
+#
+# Not retuned: widening the quantiles until coverage hit 68% on the split it is
+# measured on would be fitting the evaluation set.
+INTERVAL_CALIBRATION = {
+    "nominal": 0.68,
+    "measured": {"real": 0.608, "apparent": 0.617},
+    "corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3807",
+    "scope": "corpus",
+    "note": (
+        "The low/high interval is nominally 68% (the 0.16/0.84 quantiles) but "
+        "covers about 61% on this corpus. The shortfall is a property of the "
+        "construction and corpus, not of either checkpoint -- the two models "
+        "differ by 0.9pp. Not retuned, because tuning it to the split it is "
+        "measured on would be fitting the evaluation set."
+    ),
+}
+
 # Decodes we know how to serve. A checkpoint may declare its own via
 # meta["decode"]; see TorchPredictor for why we honour it.
 SUPPORTED_DECODES = ("median", "expectation")

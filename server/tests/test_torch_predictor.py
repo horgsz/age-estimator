@@ -16,6 +16,7 @@ from conftest import FakeDetector
 
 from server import config
 from server.predictor import (
+    INTERVAL_CALIBRATION,
     MEASURED_ACCURACY_BY_DIGEST,
     StubPredictor,
     TorchPredictor,
@@ -601,3 +602,66 @@ def test_an_unmeasured_checkpoint_gets_no_caveat(tmp_path):
 
     assert info["sha256"] not in MEASURED_ACCURACY_BY_DIGEST
     assert info["user_facing"] is None
+
+
+def test_interval_calibration_is_corpus_scoped_not_per_model():
+    """The counterpart to the test above, and the reason both exist.
+
+    Accuracy is per-checkpoint; interval coverage is not. Measured on the same
+    held-out split the two served models cover 61.7% and 60.8% -- a 0.9pp gap,
+    i.e. the ~7pp shortfall against the 68% nominal target belongs to the
+    quantile construction and this corpus, not to either set of weights.
+
+    It was once reported as a per-model regression by comparing 75% on UTKFace
+    against 60.8% on real ground truth. This asserts the scope so that nobody
+    re-nests it per model and re-creates that impression.
+    """
+    assert INTERVAL_CALIBRATION["scope"] == "corpus"
+
+    measured = INTERVAL_CALIBRATION["measured"]
+    spread = abs(measured["real"] - measured["apparent"])
+    assert spread < 0.02, "models differ too little on coverage to key it per model"
+
+    shortfall = INTERVAL_CALIBRATION["nominal"] - max(measured.values())
+    assert shortfall > 0.05, "both models undercover; that is the documented finding"
+
+    # It must not have leaked into the per-digest accuracy table.
+    for entry in MEASURED_ACCURACY_BY_DIGEST.values():
+        assert "interval_coverage" not in entry
+        assert "coverage" not in (entry.get("user_facing") or {})
+
+
+def test_health_withholds_interval_calibration_for_the_stub(client):
+    """The stub's intervals are synthetic, so a real measurement must not ride along.
+
+    Placement is the claim elsewhere; here absence is. Serving a measured 61%
+    coverage beside deterministic made-up predictions would attach a real
+    number to weights that do not exist -- the same relabelling /health was
+    built to prevent.
+    """
+    payload = client.get("/health").json()
+
+    assert payload["stub"] is True
+    assert "interval_calibration" not in payload
+
+
+def test_health_reports_interval_calibration_at_top_level_for_real_weights(tmp_path):
+    """A sibling of the model information, never a field within it."""
+    from fastapi.testclient import TestClient
+
+    from server import app as app_mod
+
+    ckpt = _write_checkpoint(tmp_path, name="real_weights.pt")
+    app_mod.set_registry(None)
+    app_mod.set_predictor(TorchPredictor(str(ckpt)))
+    try:
+        client = TestClient(app_mod.app)
+        payload = client.get("/health").json()
+        client.close()
+    finally:
+        app_mod.set_predictor(None)
+
+    assert payload["stub"] is False
+    assert payload["interval_calibration"]["scope"] == "corpus"
+    # Never nested under the artifact it is not a property of.
+    assert "interval_calibration" not in (payload.get("checkpoint") or {})

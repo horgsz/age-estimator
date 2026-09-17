@@ -27,7 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import config
-from .predictor import AgePredictor, load_predictor
+from .predictor import INTERVAL_CALIBRATION, AgePredictor, load_predictor
 from .registry import ModelRegistry, build_registry
 
 logging.basicConfig(
@@ -152,6 +152,16 @@ async def health() -> dict:
     # path has changed underneath us before.
     if _predictor is None:
         payload["models"] = get_registry().describe()
+    # A sibling of `models`, not a field inside each entry, and that placement
+    # is the point: interval coverage is the one derived number here that is
+    # NOT per-checkpoint (61.7% vs 60.8% on the same split). Nesting it per
+    # model would imply a difference the measurement does not support.
+    #
+    # Withheld for the stub, whose intervals are synthetic. The figure is a
+    # real measurement of real weights; serving it beside made-up predictions
+    # would be the same relabelling this endpoint exists to prevent.
+    if not predictor.is_stub:
+        payload["interval_calibration"] = INTERVAL_CALIBRATION
     return payload
 
 
