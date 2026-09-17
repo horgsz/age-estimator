@@ -893,6 +893,29 @@ experiment **partitioned** the elderly bias into a label-induced component (now
 removed) and a residual (not explained here) — it did not eliminate it, and it
 does not identify what the residual is.
 
+#### Why the architecture was deliberately not improved
+
+A reasonable reader will ask why a retrain was not also an opportunity to try a
+better backbone. It was held fixed on purpose — same ImageNet-pretrained
+`mobilenetv3_small_100`, same 101-bin head — so that **the only thing that
+changed was the data**.
+
+That constraint is what makes the 3.8-year movement mean anything. Had the
+architecture moved too, the elderly bias would still have improved by the same
+3.8 years and the number would have been *uninterpretable*: no amount of care in
+measuring it could have attributed it between labels and capacity after the fact.
+The partition is a property of the experiment's design, not of how carefully the
+result was measured, and no subsequent analysis could have recovered it.
+
+The same applies to the decode comparison. Holding architecture, head, optimiser,
+schedule and seed fixed across the three loss variants is what licenses reading
+the sign flip as caused by the smoothing pedestal rather than by anything else
+that happened to differ.
+
+The cost is real — this says nothing about whether a larger backbone would do
+better, and it probably would. That question is still open precisely because
+answering it here would have closed a more valuable one.
+
 ### A destroyed checkpoint, and what it cost
 
 Partway through publishing I wrote the chosen artifact to
