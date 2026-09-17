@@ -222,6 +222,31 @@ is a `torch.save` dict:
 }
 ```
 
+### Two models, switchable per request
+
+Both checkpoints are loaded at startup and stay resident. `POST /estimate`
+takes an optional `model` field (query or form) selecting between them, and
+echoes the one used in the `X-Model` response header:
+
+| key | predicts | artifact |
+| --- | --- | --- |
+| `real` (default) | how old the person **is** | `age_model_realgt.pt` |
+| `apparent` | how old the person **looks** | `age_model.pt` |
+
+Point `AGE_MODEL_DIR` at the directory holding both, e.g.
+
+```bash
+AGE_MODEL_DIR=/path/to/checkpoints make dev
+```
+
+`AGE_DEFAULT_MODEL` changes which one answers an unqualified request.
+`GET /health` gains a `models` block listing both with their digests.
+
+Their recorded MAEs (6.393 and 5.5472) are **not** comparable and neither model
+is "the accurate one" -- they are errors against different targets. A slot that
+is pointed at the *other* model's weights refuses to load rather than serving
+them under the wrong label, because identity is checked by content digest.
+
 ### Which checkpoint gets loaded
 
 `AGE_MODEL_PATH`, if set, wins outright and is never second-guessed. With it

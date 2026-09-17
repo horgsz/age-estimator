@@ -544,3 +544,25 @@ body.debug .faces__detail {
   line-height: 1.5;
   color: color-mix(in srgb, var(--warn) 70%, #ffffff);
 }
+
+/* Model picker. Laid out as a plain radio group: the choice is between two
+   questions, not two quality levels, so it deliberately gets no "recommended"
+   styling that would imply one is better. */
+.control-group {
+  border: 1px solid var(--line, #d0d7de);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem 0.3rem;
+  margin: 0 0 1rem;
+}
+
+.control-group[hidden] {
+  display: none;
+}
+
+.control-group legend {
+  padding: 0 0.35rem;
+}
+
+.controls--models {
+  gap: 1.25rem;
+}

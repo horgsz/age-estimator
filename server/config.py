@@ -23,6 +23,7 @@ checkpoint's own values with the defaults.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 SERVER_DIR = Path(__file__).resolve().parent
@@ -42,6 +43,79 @@ MODEL_PATH_CANDIDATES = (
     DEFAULT_MODEL_PATH,
     str(REPO_ROOT / "checkpoints" / "age_model.pt"),
 )
+
+# Directory searched for the model catalog below. Both checkpoints normally live
+# side by side; point this at wherever the `ml/` side writes them.
+MODEL_DIR = str(REPO_ROOT / "checkpoints")
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """A selectable model: which file, what it predicts, and how to say so.
+
+    `question` and `explanation` are served to the UI rather than hardcoded
+    there, so the words a user reads cannot drift from the weights that produced
+    the number. The distinction they carry is the whole point of offering both
+    models, and it is the thing most likely to be misread as "one is better".
+    """
+
+    key: str
+    filename: str
+    env_var: str
+    #: sha256 prefix of the artifact this slot was measured on. Identity is
+    #: content-addressed because filenames have been reused for different
+    #: weights twice in this project.
+    expected_digest: str
+    label: str
+    question: str
+    explanation: str
+
+
+MODEL_CATALOG: tuple[ModelSpec, ...] = (
+    ModelSpec(
+        key="real",
+        filename="age_model_realgt.pt",
+        env_var="AGE_MODEL_PATH_REAL",
+        expected_digest="fb629f49987a",
+        label="Real age",
+        question="How old this person actually is",
+        explanation=(
+            "Trained on 25,080 photos with real chronological ages (AgeDB, "
+            "APPA-REAL, FG-NET). Typical error about 6.4 years against a "
+            "person's actual age."
+        ),
+    ),
+    ModelSpec(
+        key="apparent",
+        filename="age_model.pt",
+        env_var="AGE_MODEL_PATH_APPARENT",
+        expected_digest="56894c480044",
+        label="Apparent age",
+        question="How old this person looks",
+        explanation=(
+            "Trained on UTKFace, whose labels are themselves algorithmic "
+            "estimates of apparent age. It reproduces how old a face reads to "
+            "people, which is not the same thing as how old they are."
+        ),
+    ),
+)
+
+# Which model answers a request that does not ask for one.
+DEFAULT_MODEL_KEY = "real"
+
+
+def digest_owner(digest: str | None) -> str | None:
+    """Return the catalog key a digest belongs to, if any.
+
+    Used to refuse serving one model's weights under another's label -- the
+    failure the content-addressed identity exists to prevent.
+    """
+    if not digest:
+        return None
+    for spec in MODEL_CATALOG:
+        if spec.expected_digest == digest:
+            return spec.key
+    return None
 
 # The margin between the YuNet detection box and the square we feed the model.
 #
@@ -148,7 +222,7 @@ def reload_from_env() -> None:
     Called at application startup. Safe to call again (the tests and the offline
     eval harness do), but see the ordering note in the module docstring.
     """
-    global AGE_MODEL_PATH, MODELS_DIR, CROP_MARGIN, INPUT_SIZE
+    global AGE_MODEL_PATH, MODEL_DIR, DEFAULT_MODEL_KEY, MODELS_DIR, CROP_MARGIN, INPUT_SIZE
     global IMAGENET_MEAN, IMAGENET_STD, NUM_BINS
     global MAX_UPLOAD_BYTES, ALLOWED_CONTENT_TYPES
     global DETECT_SCORE_THRESHOLD, DETECT_NMS_THRESHOLD, DETECT_TOP_K
@@ -166,6 +240,19 @@ def reload_from_env() -> None:
             (p for p in MODEL_PATH_CANDIDATES if Path(p).exists()),
             DEFAULT_MODEL_PATH,
         )
+
+    # Directory holding the model catalog's checkpoints.
+    MODEL_DIR = _env_str("AGE_MODEL_DIR", str(REPO_ROOT / "checkpoints"))
+
+    # Which catalog model serves a request that does not name one. An unknown
+    # value is refused rather than silently coerced: picking "some other model"
+    # for a mistyped key is how a user ends up reading an answer to a different
+    # question than the one they asked.
+    requested_default = _env_str("AGE_DEFAULT_MODEL", "real").strip()
+    if requested_default in {spec.key for spec in MODEL_CATALOG}:
+        DEFAULT_MODEL_KEY = requested_default
+    else:
+        DEFAULT_MODEL_KEY = "real"
 
     # Where the YuNet ONNX weights are cached (downloaded on first run).
     MODELS_DIR = Path(_env_str("SERVER_MODELS_DIR", str(SERVER_DIR / "models")))

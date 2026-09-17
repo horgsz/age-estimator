@@ -74,6 +74,9 @@ export async function fetchHealth(): Promise<HealthResponse> {
 export interface EstimateResult extends EstimateResponse {
   /** Parsed from the `X-Crop-Margin` response header; null if absent. */
   cropMargin: number | null;
+  /** Parsed from the `X-Model` response header; null if absent. Echoed so a
+   *  displayed number can always be traced to the model that produced it. */
+  model: string | null;
 }
 
 /**
@@ -86,12 +89,14 @@ export async function estimate(
   blob: Blob,
   filename = 'frame.jpg',
   cropMargin?: number | null,
+  model?: string | null,
 ): Promise<EstimateResult> {
   const form = new FormData();
   form.append('image', blob, filename);
   if (cropMargin != null && Number.isFinite(cropMargin)) {
     form.append('crop_margin', String(cropMargin));
   }
+  if (model) form.append('model', model);
 
   const response = await request('/estimate', { method: 'POST', body: form });
   if (!response.ok) {
@@ -105,5 +110,9 @@ export async function estimate(
 
   const header = response.headers.get('X-Crop-Margin');
   const parsed = header === null ? Number.NaN : Number.parseFloat(header);
-  return { ...body, cropMargin: Number.isFinite(parsed) ? parsed : null };
+  return {
+    ...body,
+    cropMargin: Number.isFinite(parsed) ? parsed : null,
+    model: response.headers.get('X-Model'),
+  };
 }

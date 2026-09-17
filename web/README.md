@@ -68,6 +68,20 @@ Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
 * **Tail caveats.** The model's error is not uniform across ages, so the UI says
   so where it matters. See below.
 
+### Switching models
+
+A radio group above the capture button chooses what to estimate: **how old this
+person actually is** (default) or **how old this person looks**. Changing it
+re-analyses the retained frame rather than re-capturing, so the two answers come
+from byte-identical pixels.
+
+The accuracy figures in the page header were measured on the real-age model
+only. Selecting the apparent-age model removes them rather than restating them,
+since we have no measured substitute and a plausible wrong number is worse than
+none. The age-verification warning below is **not** removed -- only its number
+is -- because the apparent-age model is the worse of the two on exactly that
+risk, so dropping the warning where it matters more would be backwards.
+
 ### Not usable for age verification
 
 **About 30% of people under 18 are displayed as 18 or over.** Measured end to

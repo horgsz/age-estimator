@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import pytest
 
 from conftest import FakeDetector
@@ -472,3 +473,106 @@ def test_candidates_prefer_the_real_gt_model_then_fall_back(tmp_path, monkeypatc
     realgt.write_bytes(b"x")
     config.reload_from_env()
     assert config.AGE_MODEL_PATH == str(realgt), "should prefer real-GT when present"
+
+
+# --------------------------------------------------------------------------
+# model registry: per-request selection
+# --------------------------------------------------------------------------
+
+
+def _stub_entry(key: str, label: str, age: float, detector=None):
+    """A registry entry backed by a predictor returning a fixed age."""
+    from server import registry as registry_mod
+    from server.predictor import Decoded, StubPredictor
+
+    class Fixed(StubPredictor):
+        is_stub = False
+        model_name = f"fixed-{key}"
+
+        def _estimate(self, batch):
+            n = len(batch)
+            return Decoded(
+                age=np.full(n, age, dtype=np.float32),
+                low=np.full(n, age - 2, dtype=np.float32),
+                high=np.full(n, age + 2, dtype=np.float32),
+                expectation=np.full(n, age, dtype=np.float32),
+                std=np.full(n, 2.0, dtype=np.float32),
+            )
+
+    return registry_mod.ModelEntry(
+        key=key,
+        label=label,
+        question=label,
+        explanation="",
+        predictor=Fixed(detector=detector),
+        path=f"/tmp/{key}.pt",
+    )
+
+
+def test_each_model_key_routes_to_a_different_model(face_bytes, yunet_detector):
+    """The whole point of the toggle: two keys, two different answers."""
+    from fastapi.testclient import TestClient
+
+    from server import app as app_mod
+    from server.registry import ModelRegistry
+
+    registry = ModelRegistry(
+        [_stub_entry("real", "How old they are", 40.0, yunet_detector),
+         _stub_entry("apparent", "How old they look", 25.0, yunet_detector)],
+        default_key="real",
+    )
+    app_mod.set_predictor(None)
+    app_mod.set_registry(registry)
+    try:
+        client = TestClient(app_mod.app)
+
+        default = client.post("/estimate", files={"image": ("f.jpg", face_bytes, "image/jpeg")})
+        assert default.status_code == 200
+        assert default.headers["X-Model"] == "real"
+        assert default.json()["faces"][0]["age"] == 40.0
+
+        other = client.post(
+            "/estimate",
+            files={"image": ("f.jpg", face_bytes, "image/jpeg")},
+            data={"model": "apparent"},
+        )
+        assert other.status_code == 200
+        assert other.headers["X-Model"] == "apparent"
+        assert other.json()["faces"][0]["age"] == 25.0
+
+        unknown = client.post(
+            "/estimate",
+            files={"image": ("f.jpg", face_bytes, "image/jpeg")},
+            data={"model": "nope"},
+        )
+        assert unknown.status_code == 422
+    finally:
+        app_mod.set_registry(None)
+        app_mod.set_predictor(None)
+
+
+def test_a_slot_refuses_the_other_models_weights(tmp_path, monkeypatch):
+    """Serving apparent-age weights under 'how old they actually are' is a lie.
+
+    Filenames have been reused for different weights twice in this project, so
+    identity is content-addressed and a mismatched artifact is refused outright
+    rather than served under the wrong label.
+    """
+    from server import config
+    from server import registry as registry_mod
+
+    spec = config.MODEL_CATALOG[0]
+    assert spec.key == "real"
+
+    ckpt = _write_checkpoint(tmp_path, name="age_model_realgt.pt")
+    # The legacy single-model override applies to the default slot, and the
+    # test suite sets it globally; clear it so MODEL_DIR is what resolves.
+    monkeypatch.delenv("AGE_MODEL_PATH", raising=False)
+    monkeypatch.setattr(config, "MODEL_DIR", str(tmp_path))
+    # Claim this file's digest belongs to the *other* catalog entry.
+    digest = TorchPredictor(str(ckpt)).describe_checkpoint()["sha256"]
+    monkeypatch.setattr(config, "digest_owner", lambda d: "apparent" if d == digest else None)
+
+    entry = registry_mod._load_entry(spec, detector=None)
+    assert not entry.available
+    assert "apparent" in (entry.unavailable_reason or "")

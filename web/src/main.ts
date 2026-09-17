@@ -3,7 +3,7 @@ import './styles.css';
 import { ApiError, API_BASE, estimate, fetchHealth } from './api';
 import { Camera, CameraError, canvasToJpeg } from './camera';
 import { clearCanvas, drawToCanvas, renderBoxes, renderFaceList } from './overlay';
-import type { FaceResult } from './types';
+import type { FaceResult, ModelsInfo } from './types';
 
 /** Longest side of an analysed frame. Keeps uploads small and inference quick. */
 const MAX_ANALYSED_SIDE = 1600;
@@ -36,6 +36,11 @@ const ui = {
   reanalyse: el<HTMLButtonElement>('reanalyse'),
   tuningNote: el<HTMLParagraphElement>('tuning-note'),
   tuning: el<HTMLDetailsElement>('tuning'),
+  modelPicker: el<HTMLDivElement>('model-picker'),
+  modelNote: el<HTMLParagraphElement>('model-note'),
+  modelGroup: el<HTMLFieldSetElement>('model-picker-group'),
+  appSub: el<HTMLParagraphElement>('app-sub'),
+  appWarn: el<HTMLParagraphElement>('app-warn'),
 };
 
 // Opening the advanced panel also reveals the per-face debug details (the
@@ -58,6 +63,101 @@ let busy = false;
  * re-capturing from the webcam would change the pose and the lighting too.
  */
 let lastCanvas: HTMLCanvasElement | null = null;
+
+/**
+ * Which model answers the next request, and what /health said about them.
+ *
+ * `null` means "whatever the server defaults to" — the UI does not assume it
+ * knows, because the default is server-configured.
+ */
+let selectedModel: string | null = null;
+let models: ModelsInfo | null = null;
+
+/**
+ * Accuracy copy is a property of specific weights, not of the app.
+ *
+ * The header quotes figures measured on the real-GT model. They are simply
+ * untrue of the apparent-age model, which was measured against a different
+ * target entirely, so when it is selected the numbers are removed rather than
+ * restated — we have no measured substitute to put there, and a plausible
+ * wrong number is worse than none.
+ *
+ * The age-verification warning is NOT removed. It is a safety disclaimer, and
+ * the apparent-age model is the *worse* of the two on exactly that risk, so
+ * dropping it where it matters more would be precisely backwards. Only its
+ * number goes; the claim stays.
+ */
+const DEFAULT_SUB = ui.appSub.innerHTML;
+const DEFAULT_WARN = ui.appWarn.innerHTML;
+
+const GENERIC_SUB =
+  'Point a camera at a face, or drop in a photo. Estimates are rough, and ' +
+  'individual faces can be a long way out.';
+const GENERIC_WARN =
+  '<strong>Not usable for age verification.</strong> A large share of people ' +
+  'under 18 are shown as 18 or over. Do not use this to decide whether ' +
+  'someone meets an age limit.';
+
+function syncAccuracyCopy(): void {
+  const isDefault = models === null || selectedModel === null
+    || selectedModel === models.default;
+  ui.appSub.innerHTML = isDefault ? DEFAULT_SUB : GENERIC_SUB;
+  ui.appWarn.innerHTML = isDefault ? DEFAULT_WARN : GENERIC_WARN;
+}
+
+function renderModelPicker(info: ModelsInfo): void {
+  models = info;
+  selectedModel = selectedModel ?? info.default;
+  ui.modelPicker.replaceChildren();
+
+  // One model (or none) is not a choice; hide the control rather than showing
+  // a radio group with a single option.
+  if (info.models.filter((m) => m.available).length < 2) {
+    ui.modelGroup.hidden = true;
+    syncAccuracyCopy();
+    return;
+  }
+  ui.modelGroup.hidden = false;
+
+  for (const model of info.models) {
+    const label = document.createElement('label');
+    label.className = 'control control--check';
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'model';
+    input.value = model.key;
+    input.checked = model.key === selectedModel;
+    input.disabled = !model.available;
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      selectedModel = model.key;
+      syncAccuracyCopy();
+      showModelNote();
+      // Re-analyse the retained pixels rather than re-capturing: comparing two
+      // models is only meaningful on byte-identical input.
+      if (lastCanvas) void analyseCanvas(lastCanvas);
+    });
+    const text = document.createElement('span');
+    text.textContent = model.available
+      ? model.question
+      : `${model.question} (unavailable)`;
+    label.append(input, text);
+    if (!model.available && model.unavailable_reason) {
+      label.title = model.unavailable_reason;
+    }
+    ui.modelPicker.append(label);
+  }
+  showModelNote();
+  syncAccuracyCopy();
+}
+
+function showModelNote(): void {
+  const active = models?.models.find((m) => m.key === selectedModel);
+  ui.modelNote.textContent = active
+    ? `${active.label}: ${active.explanation} The two models are not ranked — ` +
+      'they answer different questions, so their error figures are not comparable.'
+    : '';
+}
 
 // ---------------------------------------------------------------------------
 // status / UI states
@@ -164,7 +264,12 @@ async function analyseCanvas(canvas: HTMLCanvasElement): Promise<void> {
     const blob = await canvasToJpeg(canvas, JPEG_QUALITY);
     drawToCanvas(ui.resultCanvas, canvas, canvas.width, canvas.height);
 
-    const { faces, cropMargin } = await estimate(blob, 'frame.jpg', requestedMargin());
+    const { faces, cropMargin } = await estimate(
+      blob,
+      'frame.jpg',
+      requestedMargin(),
+      selectedModel,
+    );
     showResult(faces, canvas.width, canvas.height);
     showMarginNote(cropMargin);
   } catch (err) {
@@ -378,9 +483,12 @@ async function showModelBanner(): Promise<void> {
       ui.banner.className = 'banner banner--ok';
       ui.banner.textContent = `Model loaded: ${health.model}`;
     }
+    if (health.models) renderModelPicker(health.models);
+    else ui.modelGroup.hidden = true;
   } catch {
     ui.banner.className = 'banner banner--error';
     ui.banner.textContent = `Cannot reach the API at ${API_BASE}. Start it with: make api`;
+    ui.modelGroup.hidden = true;
   }
 }
 

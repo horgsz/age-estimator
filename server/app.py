@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 
 from . import config
 from .predictor import AgePredictor, load_predictor
+from .registry import ModelRegistry, build_registry
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s"
@@ -35,14 +36,32 @@ logging.basicConfig(
 log = logging.getLogger("age_estimator.server")
 
 _predictor: AgePredictor | None = None
+_registry: ModelRegistry | None = None
 
 
-def get_predictor() -> AgePredictor:
-    """Return the process-wide predictor, creating it on first use."""
-    global _predictor
-    if _predictor is None:
-        _predictor = load_predictor()
-    return _predictor
+def get_registry() -> ModelRegistry:
+    """Return the process-wide model registry, building it on first use."""
+    global _registry
+    if _registry is None:
+        _registry = build_registry()
+    return _registry
+
+
+def set_registry(registry: ModelRegistry | None) -> None:
+    """Override the process-wide registry (used by the tests)."""
+    global _registry
+    _registry = registry
+
+
+def get_predictor(model: str | None = None) -> AgePredictor:
+    """Return the predictor for ``model``, or the default one.
+
+    ``set_predictor`` still wins outright: the tests install a single fake
+    predictor and must not have it bypassed by the registry.
+    """
+    if _predictor is not None:
+        return _predictor
+    return get_registry().predictor(model)
 
 
 def set_predictor(predictor: AgePredictor | None) -> None:
@@ -58,6 +77,13 @@ async def lifespan(app: FastAPI):
     # checkpoint's own normalisation values (applied during load) survive.
     config.reload_from_env()
 
+    set_registry(None)
+    registry = get_registry()
+    log.info(
+        "Models loaded: %s (default=%s)",
+        ", ".join(registry.available_keys) or "none",
+        registry.default_key,
+    )
     predictor = get_predictor()
     log.info(
         "Age estimator ready (model=%s, stub=%s) settings=%s",
@@ -85,7 +111,7 @@ app.add_middleware(
     # Without this the browser silently hides X-Crop-Margin from fetch(): only
     # CORS-safelisted response headers are readable cross-origin by default, and
     # the Vite dev server is a different origin to the API.
-    expose_headers=["X-Crop-Margin"],
+    expose_headers=["X-Crop-Margin", "X-Model"],
 )
 
 
@@ -114,12 +140,19 @@ async def health() -> dict:
     # additive, and is null for the stub. It exists because the artifact was
     # once republished to the same path with a different model inside it, which
     # silently invalidated an in-flight evaluation.
-    return {
+    payload = {
         "status": "ok",
         "model": predictor.model_name,
         "stub": predictor.is_stub,
         "checkpoint": predictor.describe_checkpoint(),
     }
+    # Additive: which models can be selected per request, what each one
+    # predicts, and which answers an unqualified request. Listed because the
+    # two models answer different questions and the artifact behind a given
+    # path has changed underneath us before.
+    if _predictor is None:
+        payload["models"] = get_registry().describe()
+    return payload
 
 
 @app.post("/estimate")
@@ -142,6 +175,19 @@ async def estimate(
         ge=config.MIN_CROP_MARGIN,
         le=config.MAX_CROP_MARGIN,
         description="Same as the crop_margin query parameter, as a form field.",
+    ),
+    model: str | None = Query(
+        None,
+        description=(
+            "Which model answers this request: 'real' (how old the person is) "
+            "or 'apparent' (how old they look). Defaults to the server's "
+            "AGE_DEFAULT_MODEL. The model actually used comes back in X-Model."
+        ),
+    ),
+    model_form: str | None = Form(
+        None,
+        alias="model",
+        description="Same as the model query parameter, as a form field.",
     ),
 ) -> dict:
     content_type = (image.content_type or "").split(";")[0].strip().lower()
@@ -173,8 +219,27 @@ async def estimate(
     # untouched but an A/B run can always prove which margin produced it.
     response.headers["X-Crop-Margin"] = f"{effective_margin:.4f}"
 
+    # Form field wins over the query parameter, matching crop_margin.
+    requested_model = model_form if model_form is not None else model
     try:
-        predictor = get_predictor()
+        predictor = get_predictor(requested_model)
+    except KeyError:
+        known = ", ".join(get_registry().keys)
+        raise HTTPException(
+            status_code=422, detail=f"Unknown model {requested_model!r}. Known: {known}"
+        ) from None
+    except LookupError as exc:
+        # Known key, not loaded here. 503 rather than 422: the request is
+        # valid, the environment is short a checkpoint.
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+    # Echoed so a comparison can always prove which model produced it, the same
+    # reason X-Crop-Margin exists.
+    response.headers["X-Model"] = (
+        requested_model or (get_registry().default_key if _predictor is None else "default")
+    )
+
+    try:
         faces = predictor.predict_boxes(
             frame, predictor.detector.detect(frame), effective_margin
         )

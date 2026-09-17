@@ -228,11 +228,18 @@ class MarginStats:
     margin: float
     errors: list[float] = field(default_factory=list)
     covered: int = 0  # true age fell inside the predicted [low, high]
-    # (true, predicted, low, high, confidence) per sample. Kept so error can be
-    # binned by *predicted* age, which is the only thing a UI threshold can act
-    # on — the model compresses both tails, so a threshold that looks right
-    # against true ages fires far too late against displayed ones.
-    samples: list[tuple[float, float, float, float, float]] = field(default_factory=list)
+    # (path, true, predicted, low, high, confidence) per sample. Kept so error
+    # can be binned by *predicted* age, which is the only thing a UI threshold
+    # can act on — the model compresses both tails, so a threshold that looks
+    # right against true ages fires far too late against displayed ones.
+    #
+    # `path` is carried so a dump can be re-joined to labels it was not run
+    # against — notably APPA-REAL's apparent ages, needed to judge a model that
+    # claims to predict how old a face *looks* rather than how old it is.
+    # Without it the only way to align two runs is to assume they dropped the
+    # same undetected rows in the same order, which is true but implicit, and
+    # the kind of assumption that has silently broken a comparison here before.
+    samples: list[tuple[str, float, float, float, float, float]] = field(default_factory=list)
 
     def add(
         self,
@@ -241,9 +248,10 @@ class MarginStats:
         low: float,
         high: float,
         confidence: float = 0.0,
+        path: str = "",
     ) -> None:
         self.errors.append(predicted - true_age)
-        self.samples.append((true_age, predicted, low, high, confidence))
+        self.samples.append((path, true_age, predicted, low, high, confidence))
         if low <= true_age <= high:
             self.covered += 1
 
@@ -349,7 +357,9 @@ def evaluate(
             if not results:
                 continue
             face = results[0]
-            stats[margin].add(face.age, sample.age, face.low, face.high, face.confidence)
+            stats[margin].add(
+                face.age, sample.age, face.low, face.high, face.confidence, str(sample.path)
+            )
 
             if save_crops is not None and saved < save_crops_limit * len(margins):
                 out_dir = save_crops / f"margin_{margin:.4f}"
@@ -578,12 +588,15 @@ def main(argv: list[str] | None = None) -> int:
         args.dump_predictions.parent.mkdir(parents=True, exist_ok=True)
         with args.dump_predictions.open("w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
-            writer.writerow(["margin", "true_age", "predicted", "low", "high", "confidence"])
+            writer.writerow(
+                ["margin", "path", "true_age", "predicted", "low", "high", "confidence"]
+            )
             for st in report.stats:
-                for true_age, predicted, low, high, conf in st.samples:
+                for path, true_age, predicted, low, high, conf in st.samples:
                     writer.writerow(
                         [
                             f"{st.margin:.4f}",
+                            path,
                             f"{true_age:.2f}",
                             f"{predicted:.4f}",
                             f"{low:.4f}",
