@@ -1,14 +1,15 @@
 import './styles.css';
 
-import { ApiError, API_BASE, estimate, fetchHealth } from './api';
-import { Camera, CameraError, canvasToJpeg } from './camera';
+import { API_BASE, ApiError } from './api';
+import { Camera, CameraError } from './camera';
+import type { Engine, LoadProgress } from './engine';
+import { createEngine, selectedEngineKind } from './engine';
 import type { CaveatSpec } from './overlay';
 import { clearCanvas, drawToCanvas, renderBoxes, renderFaceList } from './overlay';
 import type { FaceResult, ModelsInfo, UserFacing } from './types';
 
 /** Longest side of an analysed frame. Keeps uploads small and inference quick. */
 const MAX_ANALYSED_SIDE = 1600;
-const JPEG_QUALITY = 0.9;
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -42,7 +43,22 @@ const ui = {
   modelGroup: el<HTMLFieldSetElement>('model-picker-group'),
   appSub: el<HTMLParagraphElement>('app-sub'),
   appWarn: el<HTMLParagraphElement>('app-warn'),
+  privacyNote: el<HTMLParagraphElement>('privacy-note'),
+  loader: el<HTMLDivElement>('load-progress'),
+  loadLabel: el<HTMLSpanElement>('load-label'),
+  loadDetail: el<HTMLSpanElement>('load-detail'),
+  loadBar: el<HTMLDivElement>('load-bar'),
 };
+
+/**
+ * Where inference happens.
+ *
+ * `null` until `boot()` resolves it. The two engines -- the FastAPI server and
+ * the in-browser onnxruntime-web path -- are behind one interface precisely so
+ * nothing below this line has to know which one is live.
+ */
+let engine: Engine | null = null;
+const engineKind = selectedEngineKind();
 
 // Opening the advanced panel also reveals the per-face debug details (the
 // low–high range and the unrounded estimate). Keying this off a body class
@@ -223,8 +239,52 @@ function showMarginNote(used: number | null): void {
   ui.tuningNote.hidden = false;
   ui.tuningNote.textContent =
     requestedMargin() === null
-      ? `Server default margin: ${formatMargin(used)}`
+      ? `Default margin: ${formatMargin(used)}`
       : `Analysed with margin ${formatMargin(used)}`;
+}
+
+// ---------------------------------------------------------------------------
+// model download progress
+// ---------------------------------------------------------------------------
+
+function formatBytes(bytes: number): string {
+  return bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    : `${Math.round(bytes / 1024)} KB`;
+}
+
+/**
+ * Show real progress for the model fetch.
+ *
+ * The browser engine downloads 6.2 MB the first time a model is used, then the
+ * HTTP cache serves it instantly forever after. A percentage is available from
+ * `Content-Length`, so it is shown; when it is not (a proxy stripping the
+ * header, say), the bar goes indeterminate and the byte count is shown instead
+ * of a made-up percentage.
+ */
+function showLoadProgress(p: LoadProgress): void {
+  if (p.done || !p.label) {
+    hideLoadProgress();
+    return;
+  }
+  ui.loader.hidden = false;
+  ui.loadLabel.textContent = p.label;
+  if (p.total && p.total > 0) {
+    const pct = Math.min(100, Math.round((p.loaded / p.total) * 100));
+    ui.loadBar.style.width = `${pct}%`;
+    ui.loadBar.classList.remove('loader__bar--indeterminate');
+    ui.loadDetail.textContent = `${formatBytes(p.loaded)} of ${formatBytes(p.total)}`;
+  } else {
+    ui.loadBar.style.width = '100%';
+    ui.loadBar.classList.add('loader__bar--indeterminate');
+    ui.loadDetail.textContent = p.loaded > 0 ? formatBytes(p.loaded) : '';
+  }
+}
+
+function hideLoadProgress(): void {
+  ui.loader.hidden = true;
+  ui.loadBar.classList.remove('loader__bar--indeterminate');
+  ui.loadBar.style.width = '0%';
 }
 
 function clearResult(): void {
@@ -267,21 +327,24 @@ function showResult(faces: FaceResult[], width: number, height: number): void {
  */
 async function analyseCanvas(canvas: HTMLCanvasElement): Promise<void> {
   if (busy) return;
+  if (!engine) return;
   lastCanvas = canvas;
   setBusy(true);
   clearResult();
   setStatus('busy', 'Analysing…');
 
   try {
-    const blob = await canvasToJpeg(canvas, JPEG_QUALITY);
     drawToCanvas(ui.resultCanvas, canvas, canvas.width, canvas.height);
 
-    const { faces, cropMargin } = await estimate(
-      blob,
-      'frame.jpg',
-      requestedMargin(),
-      selectedModel,
-    );
+    // The model download happens here, not at boot: most visitors only ever use
+    // the default model, so fetching both up front would cost everyone 12.4 MB
+    // to use 6.2 MB of it.
+    await engine.prepare(selectedModel, showLoadProgress);
+
+    const { faces, cropMargin } = await engine.analyse(canvas, {
+      cropMargin: requestedMargin(),
+      model: selectedModel,
+    });
     showResult(faces, canvas.width, canvas.height);
     showMarginNote(cropMargin);
   } catch (err) {
@@ -292,6 +355,7 @@ async function analyseCanvas(canvas: HTMLCanvasElement): Promise<void> {
       setStatus('error', err instanceof Error ? err.message : 'Something went wrong.');
     }
   } finally {
+    hideLoadProgress();
     setBusy(false);
   }
 }
@@ -485,26 +549,35 @@ window.addEventListener('pagehide', () => camera.stop());
 // ---------------------------------------------------------------------------
 
 async function showModelBanner(): Promise<void> {
+  if (!engine) return;
   try {
-    const health = await fetchHealth();
-    if (health.stub) {
+    const models = await engine.describe();
+    const active = models.models.find((m) => m.key === models.default);
+    if (active?.stub) {
       ui.banner.className = 'banner banner--warn';
       ui.banner.textContent =
-        'Server is running the STUB predictor — ages are fake placeholder values, not a real estimate.';
+        'Running the STUB predictor — ages are fake placeholder values, not a real estimate.';
     } else {
       ui.banner.className = 'banner banner--ok';
-      ui.banner.textContent = `Model loaded: ${health.model}`;
+      ui.banner.textContent =
+        engine.kind === 'browser'
+          ? 'Runs in your browser. The model is downloaded once and cached.'
+          : `Model loaded: ${active?.label ?? 'unknown'}`;
     }
-    if (health.models) renderModelPicker(health.models);
-    else ui.modelGroup.hidden = true;
-  } catch {
+    renderModelPicker(models);
+  } catch (err) {
     ui.banner.className = 'banner banner--error';
-    ui.banner.textContent = `Cannot reach the API at ${API_BASE}. Start it with: make api`;
+    ui.banner.textContent =
+      engine.kind === 'browser'
+        ? err instanceof Error
+          ? err.message
+          : 'Could not load the model list.'
+        : `Cannot reach the API at ${API_BASE}. Start it with: make api`;
     ui.modelGroup.hidden = true;
   }
 }
 
-function boot(): void {
+async function boot(): Promise<void> {
   camera.setMirrored(ui.mirrorToggle.checked);
   clearResult();
   setStatus('idle', 'Nothing analysed yet.');
@@ -521,7 +594,16 @@ function boot(): void {
   }
 
   void refreshDevices();
-  void showModelBanner();
+
+  engine = await createEngine(engineKind);
+  // A genuine privacy property of the browser build, and only of it: there is
+  // no upload because there is nowhere to upload to. Stated by the engine
+  // rather than by this file, so the server build cannot accidentally claim it.
+  if (engine.privacyNote) {
+    ui.privacyNote.hidden = false;
+    ui.privacyNote.textContent = engine.privacyNote;
+  }
+  await showModelBanner();
 }
 
-boot();
+void boot();

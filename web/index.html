@@ -23,7 +23,22 @@
           people under 18 are shown as 18 or over. Do not use this to decide
           whether someone meets an age limit.
         </p>
+        <!-- Only true of the browser build, so it is filled in by the active
+             engine rather than asserted here. -->
+        <p id="privacy-note" class="app__privacy" hidden></p>
         <div id="model-banner" class="banner banner--hidden" role="status"></div>
+
+        <!-- Real byte progress for the 6.2 MB model download. An indeterminate
+             spinner on a multi-megabyte fetch is indistinguishable from a hang. -->
+        <div id="load-progress" class="loader" role="status" aria-live="polite" hidden>
+          <div class="loader__row">
+            <span id="load-label" class="loader__label"></span>
+            <span id="load-detail" class="loader__detail"></span>
+          </div>
+          <div class="loader__track">
+            <div id="load-bar" class="loader__bar"></div>
+          </div>
+        </div>
       </header>
 
       <section class="panel" aria-labelledby="capture-heading">
@@ -93,7 +108,7 @@
             How much padding is added around the detected face box before the
             crop is sent to the model. It must match how the training images
             were framed &mdash; measured at <code>0.0</code> for UTKFace, i.e.
-            the raw detector box. Leave blank to use the server default.
+            the raw detector box. Leave blank to use the default.
             Opening this panel also reveals the raw range and bbox per face.
           </p>
           <div class="controls">
