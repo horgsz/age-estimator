@@ -58,11 +58,29 @@ if [ ! -s "$LIST" ]; then
 fi
 
 # Idempotent: re-running only fetches files that are missing or zero-length.
-RAW="$RAW" BASE="$BASE" xargs -P 16 -I{} sh -c '
-  p="{}"; o="$RAW/agedb/${p#train/}"
-  mkdir -p "$(dirname "$o")"
-  [ -s "$o" ] || curl -fsSL --retry 2 --max-time 60 -o "$o" "$BASE/$p"
-' < "$LIST"
+# The URLs are percent-encoded in Python because 69 of the 16,488 filenames
+# contain a space ("16020_MorganFreeman _73_m.jpg"), which curl rejects raw.
+PAIRS="$DL/agedb_pairs.tsv"
+RAW="$RAW" BASE="$BASE" LIST="$LIST" python3 - > "$PAIRS" <<'PY'
+import os, pathlib, urllib.parse
+raw, base = os.environ["RAW"], os.environ["BASE"]
+for line in open(os.environ["LIST"]):
+    rel = line.strip()
+    if not rel:
+        continue
+    out = pathlib.Path(raw) / "agedb" / rel[len("train/"):]
+    if out.exists() and out.stat().st_size > 0:
+        continue
+    print(f"{out}\t{base}/{urllib.parse.quote(rel)}")
+PY
+
+if [ -s "$PAIRS" ]; then
+  echo "  fetching $(wc -l < "$PAIRS" | tr -d ' ') file(s) ..."
+  xargs -P 16 -L1 sh -c '
+    mkdir -p "$(dirname "$1")"
+    curl -fsSL --retry 2 --max-time 60 -o "$1" "$2" || echo "FAILED $1" >&2
+  ' _ < "$PAIRS"
+fi
 
 echo
 echo "Counts:"

@@ -62,7 +62,10 @@ COLUMNS = [
 # 078A11.JPG -> subject 078, age 11. A trailing a/b disambiguates two scans of
 # the same subject at the same age.
 FGNET_NAME_RE = re.compile(r"^(?P<subject>\d{3})A(?P<age>\d{2})[a-zA-Z]?$")
-# 10001_GoldieHawn_23_f.jpg -> identity GoldieHawn, age 23.
+# 10001_GoldieHawn_23_f.jpg -> identity GoldieHawn, age 23. A few identities
+# carry a trailing space in the original filenames ("MorganFreeman _73_m.jpg"),
+# which would otherwise split one celebrity across two groups and break the
+# subject-disjointness the splits depend on.
 AGEDB_NAME_RE = re.compile(r"^(?P<image_id>\d+)_(?P<identity>.+)_(?P<age>\d+)_(?P<gender>[fm])$")
 
 
@@ -119,7 +122,7 @@ def load_appa_real(root: Path) -> pd.DataFrame:
     for disk_split, split in split_map.items():
         gt_path = root / f"gt_avg_{disk_split}.csv"
         if not gt_path.is_file():
-            raise FileNotFoundError(f"{gt_path} not found; re-run download_appa_real.sh")
+            raise FileNotFoundError(f"{gt_path} not found; re-run datasets/download.sh")
         gt = pd.read_csv(gt_path)
 
         image_dir = root / disk_split
@@ -160,7 +163,7 @@ def load_fgnet(root: Path, seed: int = SEED) -> pd.DataFrame:
     """Index FG-NET, parsing subject + age from the filename, split by subject."""
     image_dir = root / "FGNET" / "images"
     if not image_dir.is_dir():
-        raise FileNotFoundError(f"{image_dir} not found; re-run download_fgnet.sh")
+        raise FileNotFoundError(f"{image_dir} not found; re-run datasets/download.sh")
 
     rows, malformed = [], []
     for image_path in sorted(image_dir.iterdir()):
@@ -203,7 +206,7 @@ def load_agedb(root: Path, seed: int = SEED) -> pd.DataFrame:
     """
     image_dir = root / "images"
     if not image_dir.is_dir():
-        raise FileNotFoundError(f"{image_dir} not found; re-run download_agedb.sh")
+        raise FileNotFoundError(f"{image_dir} not found; re-run datasets/download.sh")
 
     rows, malformed = [], []
     for image_path in sorted(image_dir.rglob("*.jpg")):
@@ -222,7 +225,7 @@ def load_agedb(root: Path, seed: int = SEED) -> pd.DataFrame:
                 "real_ground_truth": True,
                 "apparent_age": pd.NA,
                 "apparent_age_std": pd.NA,
-                "subject_id": f"agedb:{match.group('identity')}",
+                "subject_id": f"agedb:{match.group('identity').strip()}",
             }
         )
 

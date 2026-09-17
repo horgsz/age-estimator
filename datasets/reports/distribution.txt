@@ -1,0 +1,97 @@
+=== Corpus summary ===
+
+source         images   real GT  subjects    age range
+------------------------------------------------------
+agedb          16,487      True       567        1-100
+appa-real       7,591      True     7,591        1-100
+fgnet           1,002      True        82         0-69
+utkface        23,684     False    23,684        1-100
+------------------------------------------------------
+TOTAL          48,764              31,924
+
+real_ground_truth=True : 25,080 (51.43%)
+real_ground_truth=False: 23,684 (48.57%)  [utkface, DEX-estimated]
+
+=== Age distribution by decade and source ===
+
+  decade      agedb  appa-real      fgnet    utkface     total
+--------------------------------------------------------------
+     0-9         48        663        371      3,062     4,144
+   10-19        499      1,213        339      1,531     3,582
+   20-29      2,501      2,075        144      7,344    12,064
+   30-39      3,612      1,564         79      4,536     9,791
+   40-49      3,164        940         46      2,245     6,395
+   50-59      2,645        615         15      2,299     5,574
+   60-69      2,051        279          8      1,316     3,654
+   70-79      1,383        130          0        699     2,212
+     80+        584        112          0        652     1,348
+--------------------------------------------------------------
+   TOTAL     16,487      7,591      1,002     23,684    48,764
+
+=== Age distribution by decade and label provenance ===
+
+  decade DEX-estimated    real GT     total
+-------------------------------------------
+     0-9      3,062      1,082     4,144
+   10-19      1,531      2,051     3,582
+   20-29      7,344      4,720    12,064
+   30-39      4,536      5,255     9,791
+   40-49      2,245      4,150     6,395
+   50-59      2,299      3,275     5,574
+   60-69      1,316      2,338     3,654
+   70-79        699      1,513     2,212
+     80+        652        696     1,348
+-------------------------------------------
+   TOTAL     23,684     25,080    48,764
+
+=== Age distribution by decade and split ===
+
+  decade      train        val       test     total
+---------------------------------------------------
+     0-9      3,422        323        399     4,144
+   10-19      2,718        444        420     3,582
+   20-29      9,837      1,062      1,165    12,064
+   30-39      7,844        892      1,055     9,791
+   40-49      5,102        581        712     6,395
+   50-59      4,568        469        537     5,574
+   60-69      3,009        307        338     3,654
+   70-79      1,782        201        229     2,212
+     80+      1,082        115        151     1,348
+---------------------------------------------------
+   TOTAL     39,364      4,394      5,006    48,764
+
+=== Weak-spot coverage (the point of this corpus) ===
+
+under 12:
+  total            4,567  (9.37% of corpus)
+  real GT          1,284  (28.11% of this band)
+    agedb           81
+    appa-real      759
+    fgnet          444
+    utkface      3,283
+  real GT in train   797
+
+70 and over:
+  total            3,560  (7.30% of corpus)
+  real GT          2,209  (62.05% of this band)
+    agedb        1,967
+    appa-real      242
+    utkface      1,351
+  real GT in train 1,649
+
+80 and over:
+  total            1,348  (2.76% of corpus)
+  real GT            696  (51.63% of this band)
+    agedb          584
+    appa-real      112
+    utkface        652
+  real GT in train   496
+
+=== Split sizes ===
+
+split      test  train   val
+source                      
+agedb      1731  13146  1610
+appa-real  1978   4113  1500
+fgnet       112    790   100
+utkface    1185  21315  1184
