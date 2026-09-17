@@ -333,11 +333,25 @@ class TorchPredictor(AgePredictor):
             "bytes": self._size_bytes,
             # The checkpoint's own recorded figure, NOT the accuracy of what we
             # serve. It was measured with the soft-expectation decode; we ship
-            # the median decode, which is materially better. Reported under a
-            # name that cannot be mistaken for current accuracy.
+            # the median decode. Reported under a name that cannot be mistaken
+            # for current accuracy.
             "recorded_test_mae": round(float(test_mae), 4) if test_mae is not None else None,
             "recorded_test_mae_decode": "expectation",
             "serving_decode": "median",
+            # Both of the above, and our own 4.762 end-to-end figure, are
+            # measured against UTKFace labels -- which are themselves
+            # DEX-algorithm estimates. They measure agreement with a labelling
+            # method, not accuracy against real age. Against real chronological
+            # ages (APPA-REAL, 7,534 images) the MAE is 8.52. Anything shown to
+            # a user must quote that number, so it is served here alongside the
+            # in-corpus one rather than left in a README nobody reads.
+            "in_corpus_mae_utkface": 4.762,
+            "real_age_mae_appa_real": 8.52,
+            "accuracy_note": (
+                "in_corpus_mae_utkface measures agreement with UTKFace's "
+                "DEX-derived labels. real_age_mae_appa_real is the error "
+                "against real chronological age and is the user-facing number."
+            ),
         }
 
     def _estimate(self, batch: np.ndarray) -> Decoded:

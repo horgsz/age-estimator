@@ -45,7 +45,10 @@ and the MAE the trainer claimed:
     "bytes": 6606539,
     "recorded_test_mae": 5.5472,
     "recorded_test_mae_decode": "expectation",
-    "serving_decode": "median"
+    "serving_decode": "median",
+    "in_corpus_mae_utkface": 4.762,
+    "real_age_mae_appa_real": 8.52,
+    "accuracy_note": "..."
   }
 }
 ```
@@ -55,6 +58,13 @@ the accuracy of what this server returns. It was measured with the expectation
 decode; we serve the median decode, which measures 4.762 end to end. The field
 is named that way so the two can never be confused — do not relabel it
 `test_mae`.
+
+> **Neither 5.5472 nor 4.762 is real-world accuracy.** Both are measured against
+> UTKFace labels, and those labels are themselves DEX-algorithm estimates — so
+> they measure *agreement with a labelling method*. Against real chronological
+> ages (APPA-REAL, 7,534 images) the MAE is **8.52**. `/health` serves both so
+> the distinction travels with the number instead of living only here. Anything
+> user-facing must quote 8.52.
 
 `sha256` is the first 12 hex chars of the digest of the file's bytes, so it is
 directly comparable with `shasum -a 256 <path> | cut -c1-12`.
@@ -142,12 +152,17 @@ pedestal across all 101 bins. That pedestal's own expectation is exactly 50, so
 decoding by expectation returns roughly `0.9 · age + 5` — it drags every
 estimate toward the middle of the range. The median ignores the pedestal.
 
-Measured end to end over the 1,184-image test set at `CROP_MARGIN = 0.0`:
+Measured end to end over the 1,184-image UTKFace test set at `CROP_MARGIN = 0.0`
+— these are **in-corpus** figures, see the accuracy section below:
 
 | decode | MAE | CS@5 | bias | 85-year-old displays as |
 |---|---|---|---|---|
 | soft expectation | 5.477 | 55.5% | +2.11 | ~68 |
 | **median (shipped)** | **4.762** | **69.0%** | **+0.17** | **~78** |
+
+The decode change itself was validated in-corpus only; there is no
+expectation-decode run against real ages, so the 0.7-year win is measured
+against DEX-derived labels and its true magnitude is unconfirmed.
 
 The interval is built from true CDF quantiles rather than `age ± σ`. σ is
 computed about the *mean*, so pairing it with a median point estimate would be

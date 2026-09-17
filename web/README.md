@@ -68,60 +68,74 @@ Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
 * **Tail caveats.** The model's error is not uniform across ages, so the UI says
   so where it matters. See below.
 
+### Accuracy — the number that matters
+
+**Against real chronological ages the MAE is 8.52 years** (APPA-REAL, 7,534
+images, real ages, YuNet on full original scenes).
+
+The in-corpus figure of 4.76 on UTKFace is *not* accuracy. UTKFace's labels are
+DEX-algorithm estimates, so that number measures agreement with a labelling
+method. Quote 8.52 to users.
+
+The gap is not a cropping problem — framing accounts for only ~0.4 years of it.
+The revealing part is the slopes: **0.935** against *apparent* age versus
+**0.817** against *real* age. We are a well-calibrated predictor of how old a
+face **looks** and a compressed predictor of how old someone **is**. Our
+per-image error also correlates **+0.445** with the human apparent-vs-real gap —
+when people misjudge a face, we misjudge it the same way, and in the same
+direction.
+
 ### Where the estimate is least reliable
 
-Thresholds and wording here are conditioned on the **predicted** age, because
-that is the only thing the UI knows. Binning by *true* age answers a question
-the UI cannot ask.
+Thresholds and wording are conditioned on the **predicted** age, because that is
+the only thing the UI knows. Binning by *true* age answers a question the UI
+cannot ask. This distinction has now inverted a conclusion twice, so check it
+first before changing anything here.
 
-These were re-derived after the decode changed from soft-expectation to the
-distribution median, and the change **inverted the previous conclusion**. The
-old decode suffered a label-smoothing pedestal that dragged every estimate
-toward 50, so both extremes were badly offset and both needed a warning. The
-median removes that, and with it both tail caveats.
-
-Measured end to end over 1,184 UTKFace test images at the shipped margin:
+Binned by displayed age (APPA-REAL, n = 7,534):
 
 | shown | n | MAE | bias |
 | ----: | -: | --: | ---: |
-| 0–5 | 109 | 0.98 | −0.71 |
-| 5–10 | 49 | 2.33 | −0.82 |
-| 10–12 | 13 | 3.54 | −2.31 |
-| 20–30 | 386 | 3.52 | −0.49 |
-| 30–40 | 226 | 5.90 | −0.02 |
-| 40–50 | 85 | 6.61 | +2.71 |
-| 50–60 | 138 | 7.18 | +2.09 |
-| 60–70 | 81 | 7.98 | +0.80 |
-| 70–75 | 16 | 7.81 | +2.56 |
-| 75+ | 34 | 4.82 | +0.59 |
+| 0–10 | 617 | 3.34 | −1.01 |
+| 10–20 | 1126 | 6.77 | −4.43 |
+| 20–30 | 1897 | 6.34 | +0.00 |
+| 30–40 | 1377 | 8.04 | +3.04 |
+| 40–50 | 651 | 10.27 | +6.78 |
+| 50–60 | 1198 | 13.72 | +10.94 |
+| 60–70 | 467 | 12.48 | +7.76 |
+| 70+ | 201 | 12.22 | +7.30 |
 
-**There is no longer a young caveat.** Ages shown under 12 are now the most
-accurate region the model has — MAE 1.76 — and the output reaches down to 1, so
-there is no floor to warn about.
+**One caveat ships: ages shown 40 and over.** MAE 12.48 against 6.53 below 40,
+with bias **+8.98** — so the number is both about twice as imprecise and
+systematically high. Someone displayed as 55 averages 46. It fires on 33% of
+faces, which is a lot, but the effect is large, monotonic in displayed age, and
+stable across APPA-REAL's splits (+8.75 / +9.14 / +9.07). Independently
+corroborated on FG-NET (same direction, same shape).
 
-**There is no longer an old-age caveat either**, and this one is subtle. Binned
-by *true* age the top still compresses (bias −7.8 at 80+), which is what an
-offline eval sees and is tempting to warn about. But binned by *displayed* age,
-everything shown at 80+ has bias **+1.10** — a ">= 80, reads low" rule would
-fire on a population it is not actually wrong about. There is no threshold at
-which a directional old-age warning is supportable.
+Two warnings are deliberately **not** shipped:
 
-What remains is a real precision story in mid-to-late adulthood:
-
-* Shown **40–75** → 27% of cases, MAE **7.27** against **3.83** everywhere else,
-  with a mild tendency to read old. Nearly a 2x difference, so the UI says so.
+* **No teenager caveat.** By *true* age, 10–19 is our worst region relative to
+  human raters (bias +7.42 — we read teenagers as much older than they are).
+  But by *displayed* age the sign flips: those shown as 10–20 average bias
+  **−4.43**. A "teenagers read old" warning would fire on a population for whom
+  the opposite is true. The band is also *more* accurate than average (MAE 6.77
+  vs 8.52), so there is no precision case either, and the dip is non-monotonic
+  against its neighbours (−1.01, −4.43, +0.00) — the signature of a local
+  artefact rather than a stable effect.
+* **No old-age caveat.** At true 70–79 our MAE is 10.08 against a single human
+  rater's 10.01, and our bias (−7.12) is *smaller* than the human crowd's own
+  (−7.99). Those faces genuinely read young to people. Not our defect.
 
 `tailCaveat()` in `src/overlay.ts` adds a short flag to the box label and a
 fuller explanation to the face card, both folded into the box's `aria-label` so
 the warning is not purely visual.
 
-The estimate is **not corrected**. Quietly subtracting a bias would bake a
-dataset artefact into the served answer and hide the model's real behaviour.
+The estimate is **not corrected**. Subtracting the bias would bury a known,
+measured limitation inside a number that looks authoritative.
 
 For context on why a single number is shown at all: the reported interval
-averages **11.8 years** wide, far wider than the 4.8-year MAE implies. The
-product decision is to lead with one number; the range remains in the API
-response and under the advanced panel.
+averages 11.8 years wide. The product decision is to lead with one number; the
+range remains in the API response and under the advanced panel.
 
 ### UI states
 
@@ -135,7 +149,7 @@ response and under the advanced panel.
 | Server error / unreachable | The server's `detail` message, or a "start the API" hint |
 | Invalid crop margin | The server rejects it with 422 and the message is surfaced |
 | Stub model | A banner from `GET /health` warning that the ages are fake |
-| Age shown 40–75 | A caveat under the estimate: the model's least precise range |
+| Age shown 40+ | A caveat: reads high by ~9 years and is ~2x less precise |
 
 ## Mirroring — the easy bug
 

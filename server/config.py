@@ -68,11 +68,31 @@ DEFAULT_MODEL_PATH = str(REPO_ROOT / "checkpoints" / "age_model.pt")
 # you are retuning the margin, re-run the sweep rather than trusting these
 # absolute values; their shape should hold, their levels will not.
 #
+# Every MAE on this page is against UTKFace labels, which are DEX-algorithm
+# estimates rather than real ages -- they are useful for *ranking* margins
+# against each other but they are not accuracy. Against real chronological ages
+# the model is at 8.52 (APPA-REAL). Do not quote any number from this file to a
+# user.
+#
 # It was 0.4 before any of this was measured, which framed the face at ~31% of
 # the crop area against ~94% in training and cost 3.0 years of MAE while the
 # offline eval still reported 5.5. Erring wide remains the dangerous direction;
 # the curve is markedly asymmetric and anything in [-0.05, +0.05] is within
 # ~0.11 years, so there is comfortable headroom for detector jitter.
+#
+# SCALE-INVARIANCE ASSUMPTION, now bounded rather than unknown. Every margin
+# measurement above was made on UTKFace, whose images are already tight 200x200
+# crops -- so they could not tell us whether YuNet frames a face differently on
+# a full webcam scene, which is what this server actually receives. APPA-REAL
+# supplied real full scenes and answers it: swept on its held-out split the
+# optimum is ~-0.05 rather than 0.0, because full-frame detections do run
+# slightly wider relative to the face.
+#
+# Shipping 0.0 therefore costs ~0.42 years on that corpus. We keep 0.0 anyway:
+# one corpus carrying its own domain shift does not justify moving a constant
+# that has been verified end to end twice, and -0.05 is inside the flat region
+# regardless. The point is that the residual risk here is now measured at
+# ~0.4 years instead of being an open question.
 #
 # See preprocessing.py -- this is the number to keep in sync with training.
 DEFAULT_CROP_MARGIN = 0.0

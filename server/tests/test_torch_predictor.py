@@ -181,3 +181,23 @@ def test_no_deviation_warning_for_a_contract_shaped_checkpoint(checkpoint, caplo
 
     warnings = "\n".join(r.getMessage() for r in caplog.records)
     assert "CONTRACT DEVIATION" not in warnings
+
+
+def test_health_does_not_present_in_corpus_mae_as_real_accuracy(checkpoint):
+    """UTKFace labels are DEX estimates, so in-corpus MAE is not accuracy.
+
+    Both figures are served so the distinction travels with the number. The
+    real-age figure must be present and must be the larger of the two -- if a
+    future change makes the in-corpus number look like the headline, a caller
+    would understate the error a user actually experiences by ~4 years.
+    """
+    predictor = TorchPredictor(str(checkpoint), detector=FakeDetector([]))
+    info = predictor.describe_checkpoint()
+
+    assert info["real_age_mae_appa_real"] == pytest.approx(8.52)
+    assert info["in_corpus_mae_utkface"] == pytest.approx(4.762)
+    assert info["real_age_mae_appa_real"] > info["in_corpus_mae_utkface"]
+    # The recorded checkpoint figure is in-corpus too, and must never be the
+    # only MAE on offer.
+    assert "recorded_test_mae" in info
+    assert "accuracy_note" in info and "DEX" in info["accuracy_note"]

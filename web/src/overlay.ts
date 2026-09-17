@@ -54,49 +54,65 @@ export function formatRange(face: FaceResult): string {
  *
  * Thresholds and wording are conditioned on the *predicted* age, because that
  * is the only thing the UI knows. Binning by true age answers a question the UI
- * cannot ask.
+ * cannot ask. This distinction has now inverted a conclusion twice, so it is
+ * the first thing to check before changing anything here.
  *
- * These numbers were re-derived after the decode changed from soft-expectation
- * to the distribution median, and the change inverted the previous conclusion.
- * Under the old decode a label-smoothing pedestal dragged every estimate toward
- * 50, so the extremes were badly offset (a real 85-year-old displayed as ~68)
- * and both tails needed a warning. The median ignores that pedestal, and the
- * offsets largely vanished.
+ * These numbers come from APPA-REAL (7,534 images, real chronological ages,
+ * YuNet on full original scenes) rather than from UTKFace. UTKFace's labels are
+ * DEX-algorithm estimates, so our in-corpus MAE of 4.76 is substantially
+ * agreement with the labelling method rather than accuracy against real age.
+ * Against real ages the MAE is 8.52. Caveats must be derived from the latter --
+ * the in-corpus numbers understate the error a user actually experiences.
  *
- * Measured end to end over 1,184 UTKFace test images at the shipped margin:
+ * Binned by DISPLAYED age (n = 7,534, margin 0.0, median decode):
  *
  *   shown     n     MAE    bias
- *   0–5     109    0.98   −0.71
- *   5–10     49    2.33   −0.82
- *   10–12    13    3.54   −2.31
- *   20–30   386    3.52   −0.49
- *   30–40   226    5.90   −0.02
- *   40–50    85    6.61   +2.71
- *   50–60   138    7.18   +2.09
- *   60–70    81    7.98   +0.80
- *   70–75    16    7.81   +2.56
- *   75+      34    4.82   +0.59
+ *   0–10    617    3.34   −1.01
+ *   10–20  1126    6.77   −4.43
+ *   20–30  1897    6.34   +0.00
+ *   30–40  1377    8.04   +3.04
+ *   40–50   651   10.27   +6.78
+ *   50–60  1198   13.72  +10.94
+ *   60–70   467   12.48   +7.76
+ *   70+     201   12.22   +7.30
  *
- * Two consequences, both of which reverse earlier behaviour:
+ * One caveat ships, for ages shown 40 and over: MAE 12.48 against 6.53 below
+ * 40, with bias +8.98. So the number is both about twice as imprecise and
+ * systematically high -- someone displayed as 55 averages 46. It fires on 33%
+ * of faces, which is a lot, but the effect is large, monotonic in displayed age
+ * and stable across APPA-REAL's splits (+8.75 / +9.14 / +9.07).
  *
- * 1. The young caveat is GONE. Ages shown under 12 are now the most accurate
- *    region the model has (MAE 1.76, bias −0.99) and the output reaches down to
- *    1, so there is no floor to warn about. The old "likely younger than shown"
- *    note would now be both unnecessary and pointing the wrong way.
+ * Two warnings that are NOT shipped, both because re-conditioning on displayed
+ * age reversed or dissolved them:
  *
- * 2. The old-age caveat is GONE TOO, and this one is subtle. Binned by *true*
- *    age the top still compresses (bias −7.8 at 80+), which is what an offline
- *    eval sees and it is tempting to warn about. But binned by *displayed* age,
- *    everything shown at 80+ has bias +1.10 — a ">= 80, reads low" rule would
- *    fire on a population it is not actually wrong about. There is no threshold
- *    where a directional old-age warning is supportable.
+ * 1. No teenager caveat. Binned by *true* age, 10–19 is our worst region
+ *    relative to human raters: bias +7.42, i.e. we read teenagers as much
+ *    older than they are. But binned by *displayed* age the sign flips --
+ *    those shown as 10–20 average bias −4.43, i.e. they are older than shown.
+ *    A warning saying "teenagers read old" would fire on a population for whom
+ *    the opposite is true. The band is also more accurate than average
+ *    (MAE 6.77 vs 8.52 overall), so there is no precision case either, and the
+ *    dip is non-monotonic against its neighbours (−1.01, −4.43, +0.00), which
+ *    is the signature of a local artefact rather than a stable effect.
  *
- * What is left is a genuine precision story in mid-to-late adulthood: 40–75 is
- * 27% of cases at MAE 7.27, against 3.83 everywhere else. That is nearly a 2x
- * difference and it is worth telling the user about, so it is the only caveat.
+ * 2. No old-age caveat. Previously removed on UTKFace evidence; APPA-REAL
+ *    confirms it. At true 70–79 our MAE is 10.08 against a single human
+ *    rater's 10.01, and our bias (−7.12) is smaller than the human crowd's own
+ *    (−7.99). Those faces genuinely read young to people; the labels encode
+ *    that and we reproduce it. It is not a defect to warn about.
+ *
+ * Independently corroborated on FG-NET (998 images, real ages, never used to
+ * derive any of the above): shown ≥ 40 has MAE 17.28 and bias +16.55 against
+ * 5.57 / +4.24 below 40 — same direction, same shape. Its magnitude is not
+ * quoted anywhere, because FG-NET's median true age is 13 and only 7% of it is
+ * genuinely over 40, so a high prediction there is near-certainly wrong and the
+ * effect is inflated. It is corroboration of direction, not of size. Every
+ * number the UI states comes from APPA-REAL, which is 27% over-40.
+ *
+ * The estimate is never silently corrected. Subtracting the bias would bury a
+ * known, measured limitation inside a number that looks authoritative.
  */
 const MID_LOW = 40;
-const MID_HIGH = 75;
 
 export interface TailCaveat {
   kind: 'mid';
@@ -105,15 +121,15 @@ export interface TailCaveat {
 }
 
 export function tailCaveat(age: number): TailCaveat | null {
-  if (age >= MID_LOW && age < MID_HIGH) {
+  if (age >= MID_LOW) {
     return {
       kind: 'mid',
-      short: 'less precise in this range',
+      short: 'often reads high — likely younger',
       long:
-        'Middle and later adulthood is this model’s weakest range: estimates ' +
-        'here are typically off by about 7 years, against roughly 4 elsewhere, ' +
-        'and they tend to read slightly old. Treat the number as a broad ' +
-        'bracket rather than a reading.',
+        'From about 40 upwards this model tends to overestimate, by roughly 9 ' +
+        'years on average, and it is about twice as imprecise here as it is ' +
+        'with younger faces. The person is more likely younger than the number ' +
+        'suggests than older. Treat it as a broad bracket, not a reading.',
     };
   }
   return null;
