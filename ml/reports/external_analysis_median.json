@@ -1,0 +1,210 @@
+{
+  "decode": "median",
+  "appa": {
+    "n": 7534,
+    "error_correlation_with_human_gap": 0.44473326019483933,
+    "shared_variance_pct": 19.778767272353065,
+    "regression": {
+      "real_age": {
+        "slope": 0.8174178220633166,
+        "intercept": 8.508338939938643,
+        "r2": 0.6170974698058188
+      },
+      "apparent_age": {
+        "slope": 0.9348458286186033,
+        "intercept": 5.063880518630953,
+        "r2": 0.6705339362071366
+      }
+    },
+    "variance": {
+      "pred_minus_real": 132.06104040372966,
+      "pred_minus_apparent": 106.21407008628229,
+      "apparent_minus_real": 31.73456129276119
+    },
+    "human_baseline": {
+      "mean_ratings_per_image": 34.3375049400606,
+      "mean_inter_rater_std": 4.339864840094627,
+      "crowd_mean_error_vs_real": 4.119691207123103,
+      "single_rater_error_vs_real": 5.318771099072451
+    },
+    "by_decade": [
+      {
+        "band": "0-9",
+        "n": 661,
+        "model_mae_vs_real": 4.789712556732224,
+        "model_bias_vs_real": 4.305597579425114,
+        "model_mae_vs_apparent": 4.396564033120328,
+        "model_bias_vs_apparent": 3.92890774442566,
+        "human_crowd_mae": 1.166925766021856,
+        "human_crowd_bias": 0.37964009448573244,
+        "human_single_rater_mae": 1.523100462946758
+      },
+      {
+        "band": "10-19",
+        "n": 1202,
+        "model_mae_vs_real": 8.465890183028286,
+        "model_bias_vs_real": 7.424292845257903,
+        "model_mae_vs_apparent": 6.8350552652151215,
+        "model_bias_vs_apparent": 4.3070470457683,
+        "human_crowd_mae": 3.822368879502588,
+        "human_crowd_bias": 3.119675407066766,
+        "human_single_rater_mae": 4.495593161710594
+      },
+      {
+        "band": "20-29",
+        "n": 2056,
+        "model_mae_vs_real": 7.833657587548638,
+        "model_bias_vs_real": 4.169260700389105,
+        "model_mae_vs_apparent": 6.806847166149377,
+        "model_bias_vs_apparent": 2.593605524900855,
+        "human_crowd_mae": 3.395973075482282,
+        "human_crowd_bias": 1.5696599977268921,
+        "human_single_rater_mae": 4.6465418096622635
+      },
+      {
+        "band": "30-39",
+        "n": 1552,
+        "model_mae_vs_real": 9.552835051546392,
+        "model_bias_vs_real": 1.9935567010309279,
+        "model_mae_vs_apparent": 8.68331929133955,
+        "model_bias_vs_apparent": 3.0885262297792413,
+        "human_crowd_mae": 4.205319597839042,
+        "human_crowd_bias": -1.1056331845376066,
+        "human_single_rater_mae": 5.799963035619156
+      },
+      {
+        "band": "40-49",
+        "n": 935,
+        "model_mae_vs_real": 10.303743315508022,
+        "model_bias_vs_real": 0.560427807486631,
+        "model_mae_vs_apparent": 9.565636820370644,
+        "model_bias_vs_apparent": 3.1431285018237536,
+        "human_crowd_mae": 5.364457840132589,
+        "human_crowd_bias": -2.5969155320171553,
+        "human_single_rater_mae": 6.97474055458463
+      },
+      {
+        "band": "50-59",
+        "n": 608,
+        "model_mae_vs_real": 8.082236842105264,
+        "model_bias_vs_real": 0.4440789473684211,
+        "model_mae_vs_apparent": 7.905374932125627,
+        "model_bias_vs_apparent": 3.151446458827042,
+        "human_crowd_mae": 5.389709432357121,
+        "human_crowd_bias": -2.6997471343369885,
+        "human_single_rater_mae": 6.763320240770049
+      },
+      {
+        "band": "60-69",
+        "n": 278,
+        "model_mae_vs_real": 9.356115107913668,
+        "model_bias_vs_real": -2.902877697841727,
+        "model_mae_vs_apparent": 8.708561246989293,
+        "model_bias_vs_apparent": 1.2825271374755438,
+        "human_crowd_mae": 6.070840165728156,
+        "human_crowd_bias": -4.17784755302912,
+        "human_single_rater_mae": 7.386020628001467
+      },
+      {
+        "band": "70-79",
+        "n": 130,
+        "model_mae_vs_real": 10.076923076923077,
+        "model_bias_vs_real": -7.123076923076923,
+        "model_mae_vs_apparent": 8.072329858375168,
+        "model_bias_vs_apparent": 0.8677819063682986,
+        "human_crowd_mae": 8.431601902823395,
+        "human_crowd_bias": -7.99085882944522,
+        "human_single_rater_mae": 10.005236054881575
+      },
+      {
+        "band": "80+",
+        "n": 112,
+        "model_mae_vs_real": 13.008928571428571,
+        "model_bias_vs_real": -11.848214285714286,
+        "model_mae_vs_apparent": 8.43556581950614,
+        "model_bias_vs_apparent": -2.4758188550129363,
+        "human_crowd_mae": 9.745289398990055,
+        "human_crowd_bias": -9.37239543070135,
+        "human_single_rater_mae": 10.018092379309106
+      }
+    ]
+  },
+  "fgnet": {
+    "all": {
+      "n": 998,
+      "mae": 7.01002004008016,
+      "cs5": 57.11422845691383,
+      "bias": 5.75751503006012
+    },
+    "colour": {
+      "n": 815,
+      "mae": 6.574233128834356,
+      "cs5": 59.75460122699386,
+      "bias": 5.1803680981595095
+    },
+    "grayscale": {
+      "n": 183,
+      "mae": 8.950819672131148,
+      "cs5": 45.3551912568306,
+      "bias": 8.327868852459016
+    },
+    "matched_under20": {
+      "colour": {
+        "n": 545,
+        "mae": 5.436697247706422,
+        "cs5": 68.44036697247707,
+        "bias": 4.977981651376147
+      },
+      "grayscale": {
+        "n": 161,
+        "mae": 9.53416149068323,
+        "cs5": 42.2360248447205,
+        "bias": 9.385093167701863
+      }
+    },
+    "padded": {
+      "n": 219,
+      "mae": 8.799086757990867,
+      "cs5": 47.48858447488584,
+      "bias": 7.794520547945205
+    },
+    "not_padded": {
+      "n": 779,
+      "mae": 6.507060333761232,
+      "cs5": 59.82028241335045,
+      "bias": 5.184852374839537
+    },
+    "clean_subset": {
+      "n": 619,
+      "mae": 6.009693053311794,
+      "cs5": 63.166397415185784,
+      "bias": 4.529886914378029
+    },
+    "under12": {
+      "all": {
+        "n": 440,
+        "mae": 5.222727272727273,
+        "cs5": 77.27272727272727,
+        "bias": 4.877272727272727
+      },
+      "colour": {
+        "n": 346,
+        "mae": 3.9364161849710984,
+        "cs5": 84.39306358381504,
+        "bias": 3.53757225433526
+      },
+      "clean": {
+        "n": 288,
+        "mae": 3.625,
+        "cs5": 85.76388888888889,
+        "bias": 3.173611111111111
+      }
+    },
+    "age_range": [
+      0,
+      69
+    ],
+    "n_over_69": 0,
+    "subjects": 82
+  }
+}

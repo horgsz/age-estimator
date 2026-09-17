@@ -353,6 +353,82 @@ def print_table(frame: pd.DataFrame, columns: dict[str, str]) -> None:
         print(f"  {str(row.iloc[0]):<8}{cells}")
 
 
+def sweep_margins(model, rows, margins, device, batch_size, score_threshold,
+                  decode, targets):
+    """MAE across several crop margins, reusing one set of detections.
+
+    YuNet's box does not depend on our crop margin, so detecting once and
+    re-cropping is exactly equivalent to re-running detection per margin and is
+    several times faster -- detection dominates the cost on full-size photos.
+
+    This matters beyond speed. Our margin constant was verified on UTKFace,
+    whose images are already tight 200x200 crops. APPA-REAL photos are full
+    scenes, which is the condition the constant was never tested under.
+    """
+    detector = make_detector(score_threshold)
+    boxes, images = {}, {}
+    for position, (_, row) in enumerate(rows.iterrows()):
+        image = cv2.imread(row["path"], cv2.IMREAD_COLOR)
+        if image is None:
+            continue
+        face = best_face(detector, image)
+        if face is None:
+            continue
+        boxes[position] = face[:4].astype(float)
+        images[position] = image
+        if position % 500 == 0:
+            print(f"    detect {position}/{len(rows)}", end="\r", flush=True)
+    print(f"    detected {len(boxes)}/{len(rows)}          ")
+
+    mean = np.array(IMAGENET_MEAN, dtype=np.float32).reshape(3, 1, 1)
+    std = np.array(IMAGENET_STD, dtype=np.float32).reshape(3, 1, 1)
+    results = {}
+
+    for margin in margins:
+        batch, positions, preds = [], [], []
+
+        def flush():
+            if not batch:
+                return
+            with torch.no_grad():
+                tensor = torch.from_numpy(np.stack(batch)).to(device)
+                logits = model(tensor)
+                age = (model.median(logits)[0] if decode == "median"
+                       else model.expectation(logits)[0])
+            preds.append(age.float().cpu().numpy())
+
+        for position, box in boxes.items():
+            crop, _ = square_crop(images[position], box, margin)
+            if crop is None:
+                continue
+            pil = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)).resize(
+                (INPUT_SIZE, INPUT_SIZE), Image.Resampling.BILINEAR
+            )
+            array = np.asarray(pil, dtype=np.float32).transpose(2, 0, 1) / 255.0
+            batch.append((array - mean) / std)
+            positions.append(position)
+            if len(batch) == batch_size:
+                flush()
+                batch = []
+        flush()
+
+        predicted = np.concatenate(preds)
+        subset = rows.iloc[positions]
+        entry = {}
+        for target in targets:
+            error = predicted - subset[target].to_numpy(dtype=float)
+            entry[target] = {
+                "mae": float(np.abs(error).mean()),
+                "cs5": float((np.abs(error) <= 5).mean() * 100),
+                "bias": float(error.mean()),
+            }
+        results[f"{margin:.4f}"] = entry
+        cells = "".join(f"{entry[t]['mae']:>16.3f}" for t in targets)
+        print(f"  {margin:>8.3f}{cells}")
+
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="External validation")
     parser.add_argument(
@@ -366,6 +442,10 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--score-threshold", type=float, default=0.6)
     parser.add_argument("--limit", type=int, default=0, help="debug: cap rows")
+    parser.add_argument(
+        "--sweep-margins", type=float, nargs="*", default=None,
+        help="re-crop at several margins from one set of detections",
+    )
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
 
@@ -395,9 +475,29 @@ def main() -> None:
     for name in args.datasets:
         print(f"=== {name.upper()} ===")
         rows = load_appa() if name == "appa" else load_fgnet()
+        if name == "appa" and args.sweep_margins is not None:
+            # Sweep on the held-out split so the curve is not read off data the
+            # constant could have been tuned on.
+            rows = rows[rows["split"] == "test"].reset_index(drop=True)
         if args.limit:
             rows = rows.head(args.limit)
         print(f"  images: {len(rows)}")
+
+        targets = ["real_age", "apparent_age"] if name == "appa" else ["real_age"]
+
+        if args.sweep_margins is not None:
+            print(f"\n  -- crop-margin sweep ({len(args.sweep_margins)} points) --")
+            header = "".join(f"{t:>16}" for t in targets)
+            print(f"  {'margin':>8}{header}")
+            sweep = sweep_margins(
+                model, rows, args.sweep_margins, device, args.batch_size,
+                args.score_threshold, args.decode, targets,
+            )
+            path = REPORT_DIR / f"external_margin_sweep_{name}_{args.decode}.json"
+            path.write_text(json.dumps(sweep, indent=2) + "\n")
+            print(f"  sweep -> {path.relative_to(REPO_ROOT)}\n")
+            summary["datasets"][name] = {"margin_sweep": sweep}
+            continue
 
         result = predict(
             model, rows, args.margin, device, args.batch_size,
@@ -421,7 +521,6 @@ def main() -> None:
             ),
         }
 
-        targets = ["real_age", "apparent_age"] if name == "appa" else ["real_age"]
         for target in targets:
             if target not in result.columns:
                 continue
@@ -456,7 +555,10 @@ def main() -> None:
         print(f"\n  per-sample dump -> {dump.relative_to(REPO_ROOT)}\n")
         summary["datasets"][name] = entry
 
-    out = REPORT_DIR / f"external_validation_{args.decode}.json"
+    # Sweep mode writes its own summary so a sweep can never clobber the full
+    # evaluation's metrics, which are the numbers the report quotes.
+    stem = "external_sweep" if args.sweep_margins is not None else "external_validation"
+    out = REPORT_DIR / f"{stem}_{args.decode}.json"
     out.write_text(json.dumps(summary, indent=2) + "\n")
     print(f"Summary -> {out.relative_to(REPO_ROOT)}")
     print("\nNote: the checkpoint was not modified. These are out-of-corpus")
