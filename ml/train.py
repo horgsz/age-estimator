@@ -10,9 +10,17 @@ from pathlib import Path
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from data import NUM_BINS, UTKFaceDataset, load_split
+from realgt_data import (
+    DEFAULT_DATASETS_ROOT,
+    RealGTDataset,
+    assert_no_subject_leakage,
+    load_manifest,
+    split_frame,
+)
 from model import AgeEstimator, save_checkpoint
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -31,10 +39,31 @@ def pick_device(requested: str) -> torch.device:
 
 
 def build_loaders(
-    batch_size: int, workers: int, limit: int | None, seed: int, zoom_out: float = 0.0
+    batch_size: int, workers: int, limit: int | None, seed: int, zoom_out: float = 0.0,
+    corpus: str = "utkface", datasets_root=DEFAULT_DATASETS_ROOT,
 ) -> tuple[DataLoader, DataLoader]:
-    train_df = load_split("train")
-    val_df = load_split("val")
+    """Build train/val loaders for either corpus.
+
+    The two corpora share this function, and the augmentations, deliberately:
+    the real-GT retrain is meant to isolate the *data* change, so every other
+    part of the recipe has to be the same code rather than merely the same
+    intent.
+    """
+    if corpus == "realgt":
+        frame = load_manifest()
+        # Re-checked here, not just at corpus-build time, because leakage shows
+        # up as a better score rather than an error.
+        assert_no_subject_leakage(frame)
+        train_df, val_df = split_frame(frame, "train"), split_frame(frame, "val")
+        make = lambda df, tr: RealGTDataset(  # noqa: E731
+            df, train=tr, datasets_root=datasets_root,
+            zoom_out_prob=zoom_out if tr else 0.0,
+        )
+    else:
+        train_df, val_df = load_split("train"), load_split("val")
+        make = lambda df, tr: UTKFaceDataset(  # noqa: E731
+            df, train=tr, zoom_out_prob=zoom_out if tr else 0.0,
+        )
     if limit:
         train_df = train_df.sample(
             n=min(limit, len(train_df)), random_state=seed
@@ -44,7 +73,7 @@ def build_loaders(
         ).reset_index(drop=True)
 
     train_loader = DataLoader(
-        UTKFaceDataset(train_df, train=True, zoom_out_prob=zoom_out),
+        make(train_df, True),
         batch_size=batch_size,
         shuffle=True,
         num_workers=workers,
@@ -53,7 +82,7 @@ def build_loaders(
         prefetch_factor=4 if workers > 0 else None,
     )
     val_loader = DataLoader(
-        UTKFaceDataset(val_df, train=False),
+        make(val_df, False),
         batch_size=batch_size,
         shuffle=False,
         num_workers=workers,
@@ -97,6 +126,47 @@ def amp_is_stable(model: nn.Module, device: torch.device, criterion: nn.Module) 
     return bool(ok)
 
 
+class DLDLLoss(nn.Module):
+    """Deep Label Distribution Learning: a distance-aware soft target.
+
+    ``label_smoothing`` spreads its mass *uniformly*, which for an ordinal
+    target is a strange claim: it says a 3-year-old and a 90-year-old are
+    equally plausible alternatives for a 5-year-old. It also plants a uniform
+    pedestal whose own expectation is 50, which is what made the soft-expectation
+    decode mean-revert (see ml/README.md).
+
+    DLDL replaces that with a Gaussian centred on the true age, so probability
+    mass is placed on *nearby* ages in proportion to how near they are. The
+    supervision then matches the metric: being wrong by one year should cost
+    less than being wrong by forty.
+
+    Loss is KL divergence between the predicted distribution and the target.
+    """
+
+    def __init__(self, num_bins: int, sigma: float = 2.5) -> None:
+        super().__init__()
+        self.sigma = sigma
+        centers = torch.arange(num_bins, dtype=torch.float32)
+        self.register_buffer("centers", centers)
+
+    def forward(self, logits: torch.Tensor, ages: torch.Tensor) -> torch.Tensor:
+        centers = self.centers.to(logits.device)
+        diff = centers.unsqueeze(0) - ages.float().unsqueeze(1)
+        target = torch.exp(-(diff ** 2) / (2.0 * self.sigma ** 2))
+        # Renormalise after truncation: ages near 0 or 100 lose the tail that
+        # falls outside the support, and an unnormalised target would silently
+        # down-weight exactly the extreme ages this retrain is meant to fix.
+        target = target / target.sum(dim=1, keepdim=True)
+        log_pred = F.log_softmax(logits.float(), dim=1)
+        return F.kl_div(log_pred, target, reduction="batchmean")
+
+
+def build_criterion(args: argparse.Namespace) -> nn.Module:
+    if args.loss == "dldl":
+        return DLDLLoss(NUM_BINS, sigma=args.dldl_sigma)
+    return nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+
+
 def mixup_batch(
     images: torch.Tensor, targets: torch.Tensor, alpha: float
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
@@ -133,7 +203,8 @@ def train(args: argparse.Namespace) -> float:
     print(f"Device: {device}")
 
     train_loader, val_loader = build_loaders(
-        args.batch_size, args.workers, args.limit, args.seed, args.zoom_out
+        args.batch_size, args.workers, args.limit, args.seed, args.zoom_out,
+        corpus=args.corpus, datasets_root=args.datasets_root,
     )
     print(
         f"Train batches: {len(train_loader)} | Val batches: {len(val_loader)} "
@@ -141,7 +212,7 @@ def train(args: argparse.Namespace) -> float:
     )
 
     model = AgeEstimator(num_bins=NUM_BINS, pretrained=not args.no_pretrained).to(device)
-    criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+    criterion = build_criterion(args).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
 
     steps_per_epoch = len(train_loader)
@@ -239,9 +310,16 @@ def train(args: argparse.Namespace) -> float:
             save_checkpoint(model, best_mae, args.checkpoint)
             print(f"  saved checkpoint -> {args.checkpoint}")
 
-    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    HISTORY_PATH.write_text(json.dumps(history, indent=2))
-    print(f"\nBest val MAE: {best_mae:.3f}\nHistory -> {HISTORY_PATH}")
+    # Derived from the checkpoint name so parallel variants cannot silently
+    # overwrite each other's curves.
+    stem = Path(args.checkpoint).stem
+    history_path = (
+        HISTORY_PATH if stem == "age_model"
+        else HISTORY_PATH.with_name(f"train_history_{stem}.json")
+    )
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    history_path.write_text(json.dumps(history, indent=2))
+    print(f"\nBest val MAE: {best_mae:.3f}\nHistory -> {history_path}")
     return best_mae
 
 
@@ -275,6 +353,17 @@ def main() -> None:
     parser.add_argument("--log-every", type=int, default=50)
     parser.add_argument("--no-pretrained", action="store_true")
     parser.add_argument("--checkpoint", type=Path, default=CHECKPOINT_PATH)
+    parser.add_argument(
+        "--corpus", choices=["utkface", "realgt"], default="utkface",
+        help="utkface = DEX-labelled (the shipped model); realgt = chronological",
+    )
+    parser.add_argument("--datasets-root", type=Path, default=DEFAULT_DATASETS_ROOT)
+    parser.add_argument(
+        "--loss", choices=["ce", "dldl"], default="ce",
+        help="ce = cross-entropy with uniform label smoothing; "
+             "dldl = distance-aware Gaussian soft target",
+    )
+    parser.add_argument("--dldl-sigma", type=float, default=2.5)
     train(parser.parse_args())
 
 
