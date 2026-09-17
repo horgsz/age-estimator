@@ -4,8 +4,29 @@ The checkpoints in `checkpoints/` are derived from datasets that are licensed
 for **non-commercial research use only**. The code in this repository is the
 author's own; the weights are not unencumbered.
 
-**This repository is private, and the weights should not be redistributed
-publicly or used commercially without checking the terms below.**
+**This repository is public, and the GitHub Pages build publishes both
+checkpoints as downloadable ONNX files.** That is a deliberate change from when
+this file was written, and it is a redistribution: anyone visiting
+<https://horgsz.github.io/age-estimator/> fetches
+`age_model_realgt.onnx` (6.2 MB) from the site, and both files are readable
+directly out of `checkpoints/` in this repository.
+
+Nothing below has been re-checked against that fact. The terms on this page
+permit **non-commercial research use only**, which publishing a research demo
+plausibly falls within, but "plausibly" is doing real work in that sentence:
+
+* AgeDB is 66% of the real-age corpus and its terms are non-commercial. It was
+  obtained from an unverified third-party mirror (see below), so the exact terms
+  the weights inherit have not been confirmed against the official
+  distribution.
+* UTKFace is non-commercial research only.
+* A derived model is generally treated as carrying its training data's
+  restrictions; that is an assumption, not a licence grant anyone has given.
+
+If this project is ever more than a demo — or if the repository picks up a
+licence file implying broader rights than the weights carry — resolve the
+AgeDB provenance question first. Do not treat "it was already public" as having
+settled it.
 
 ## What each model was trained on
 

@@ -86,7 +86,13 @@ jobs:
             console.log("model assets match models.json");
           '
 
+      # `enablement` turns Pages on for the repository if it is not already.
+      # Doing it here rather than by hand means a fresh clone of this repo
+      # deploys without a manual settings step, and the workflow token is the
+      # one credential guaranteed to have `pages: write`.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:

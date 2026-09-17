@@ -7,6 +7,21 @@ It runs **today, without a trained model**: if no checkpoint is present it falls
 back to a deterministic `StubPredictor` and says so loudly at startup. Swapping
 in the real weights is a one-class change — nothing else in the stack moves.
 
+> **This is the reference implementation.** The GitHub Pages build
+> ([`web/src/browser/`](../web/README.md#the-browser-build)) reimplements the
+> detection, crop and decode below in TypeScript, because Pages cannot run
+> Python. If anything here changes — the crop geometry, `CROP_MARGIN`, the
+> detector thresholds, the decode — the browser port has to change with it, and
+> [`parity/`](../parity/README.md) is the check that catches it if it does not.
+> Two things carry that contract automatically:
+>
+> * `web/public/models/models.json` is generated from `config.py` and
+>   `predictor.py` by `server/tools/export_static_registry.py`, and
+>   `server/tests/test_static_registry.py` fails if the committed copy drifts.
+> * The parity harness imports `server.preprocessing` and `server.predictor`
+>   directly, so the reference side of the comparison follows this code without
+>   anyone remembering to update it.
+
 ## Quick start
 
 ```bash

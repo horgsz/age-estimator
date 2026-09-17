@@ -1,40 +1,78 @@
 # web/ — camera + upload UI
 
-Vite + vanilla TypeScript. No framework, no runtime dependencies.
+Vite + vanilla TypeScript. No framework.
 
-Take a photo with your webcam (or drop in an image), and the app posts it to the
-[`server/`](../server/README.md) API and draws each detected face with an **age
-range**, a point estimate, and a confidence indicator.
+Take a photo with your webcam (or drop in an image); the app draws each detected
+face with an **age range**, a point estimate, and a confidence indicator.
+
+## Two builds, one UI
+
+The same interface runs against two interchangeable inference engines. Which one
+is compiled in is a build-time choice (`VITE_ENGINE`), overridable per visit with
+`?engine=server` / `?engine=browser`.
+
+| | `server` (default) | `browser` (`--mode static`) |
+| --- | --- | --- |
+| where inference runs | the [`server/`](../server/README.md) FastAPI app | this tab |
+| how the frame gets there | JPEG POSTed to `/estimate` | never leaves the device |
+| face detection | `cv2.FaceDetectorYN` | the same YuNet ONNX via onnxruntime-web |
+| age model | `checkpoints/*.pt` via PyTorch | `checkpoints/*.onnx` via onnxruntime-web |
+| model metadata | `GET /health` | `models/models.json`, baked at build time |
+| deployed at | localhost | <https://horgsz.github.io/age-estimator/> |
+
+The browser build exists because GitHub Pages serves static files and cannot run
+Python. It is a **second implementation of logic that already exists**, which is
+a liability rather than a feature: a silent mismatch degrades every prediction
+while leaving every test green. [`parity/`](../parity/README.md) is what stops
+that — it runs the same images through both paths and requires the 224×224
+tensors to be identical. Read it before changing anything under `src/browser/`.
 
 ## Run
 
 ```bash
 cd web
 npm install
-npm run dev          # http://localhost:5173
+npm run dev          # http://localhost:5173, talks to the API
 ```
 
 The API must be running on `http://127.0.0.1:8000` — from the repo root,
 `make api`, or `make dev` / `./scripts/dev.sh` to start both at once.
 
-| Script            | Does |
-| ----------------- | ---- |
-| `npm run dev`     | Dev server with HMR on port 5173 |
-| `npm run build`   | Type-check (`tsc --noEmit`) then bundle to `dist/` |
-| `npm run preview` | Serve the production bundle |
-| `npm run typecheck` | Type-check only |
+For the fully client-side build:
+
+```bash
+npm run dev:static     # http://localhost:5173, no API needed
+npm run build:static   # bundle to dist/
+```
+
+| Script                 | Does |
+| ---------------------- | ---- |
+| `npm run dev`          | Dev server with HMR on port 5173 (server-backed) |
+| `npm run dev:static`   | Same, but running inference in the browser |
+| `npm run stage`        | Copy models + the ONNX runtime into `public/` |
+| `npm run build`        | Type-check (`tsc --noEmit`) then bundle to `dist/` |
+| `npm run build:static` | Stage, type-check, and bundle the client-side build |
+| `npm run preview`      | Serve the production bundle |
+| `npm run typecheck`    | Type-check only |
 
 ### Configuration
 
 | Variable        | Default                 | Meaning |
 | --------------- | ----------------------- | ------- |
-| `VITE_API_BASE` | `http://127.0.0.1:8000` | API origin |
+| `VITE_API_BASE` | `http://127.0.0.1:8000` | API origin (server engine only) |
+| `VITE_ENGINE`   | `server`                | `server` or `browser`; set to `browser` by `.env.static` |
+| `VITE_BASE`     | `/`                     | Deployed path prefix, read by Vite's `base` |
 
 ```bash
 VITE_API_BASE=http://127.0.0.1:9000 npm run dev
 ```
 
 Whatever origin the UI is served from must be in the server's `CORS_ORIGINS`.
+
+`VITE_BASE` matters only for the deployment: GitHub Pages serves this as a
+*project* site under `/age-estimator/`, so the default `/` would emit asset URLs
+that 404 there. The browser engine reads the same value back through
+`import.meta.env.BASE_URL` to locate `models/` and `ort/`.
 
 ## What it does
 
@@ -247,6 +285,73 @@ demonstrably informative (see the quartile table above).
 | Server error / unreachable | The server's `detail` message, or a "start the API" hint |
 | Invalid crop margin | The server rejects it with 422 and the message is surfaced |
 | Stub model | A banner from `GET /health` warning that the ages are fake |
+| Downloading a model (browser build) | A progress bar with real byte counts |
+
+## The browser build
+
+### Why the model download has a progress bar
+
+Each age model is 6.2 MB. An indeterminate spinner on a multi-megabyte fetch is
+indistinguishable from a hang, and the user has no way to judge whether waiting
+is worthwhile. `Content-Length` makes a real percentage available for free, so
+it is shown. When the header is absent the bar goes indeterminate and shows
+bytes-so-far rather than inventing a percentage.
+
+### Why only one model is fetched
+
+The models are loaded **on first use, per model**, not at boot. Most visitors
+never touch the toggle, so fetching both up front would cost everyone 12.4 MB to
+use 6.2 MB of it. The detector (230 KB) comes down alongside whichever model is
+requested first. The browser's HTTP cache makes every subsequent visit free,
+which is why the assets are served under stable, content-independent names — a
+build that fingerprinted them per deploy would throw that away.
+
+### Why the detector is YuNet and not MediaPipe
+
+MediaPipe Face Detector is the easier option — a packaged WASM task with its own
+model and no post-processing to write. It was rejected because the crop geometry
+is calibrated to *YuNet's box convention*.
+
+`CROP_MARGIN` was chosen by sweeping end-to-end MAE, and the curve either side
+of the optimum is strongly asymmetric: −0.05 costs 0.11 years, +0.2 costs 0.71,
++0.4 costs 2.97. A detector whose boxes run systematically wider than YuNet's
+does not announce itself; it shifts the *effective* margin into the expensive
+side of that curve, invisibly, with no test to fail.
+
+Running the same ONNX weights OpenCV runs does not answer that question, it
+removes it: the boxes are not close to YuNet's, they are YuNet's. Measured
+across the parity fixtures, every box matches the Python path exactly. The price
+is that `src/browser/yunet.ts` has to reimplement the post-processing
+`cv2.FaceDetectorYN` does in C++.
+
+### Why the resize is hand-written
+
+`ctx.drawImage(src, 0, 0, 224, 224)` uses an unspecified downscaling filter that
+differs between browser engines and between GPU and software paths.
+`src/browser/cv-resize.ts` is instead a port of OpenCV's own kernels, including
+its fixed-point bilinear arithmetic and round-half-to-even, so the tensor is not
+merely close to the server's — it is identical. See the file header and
+[`parity/README.md`](../parity/README.md).
+
+### Single-threaded WASM
+
+GitHub Pages cannot send `Cross-Origin-Opener-Policy` or
+`Cross-Origin-Embedder-Policy`, so `SharedArrayBuffer` is unavailable and
+multi-threaded WASM is impossible. `ort.env.wasm.numThreads` is set to `1`
+explicitly rather than left to autodetection: a failed probe surfaces as a
+worker that never initialises, which looks like a hang rather than an error.
+The parity harness asserts `crossOriginIsolated === false` so the measurement
+can never come from a threaded path the deployment cannot take.
+
+One 224×224 inference takes ~6 ms and detection 2–20 ms depending on frame size,
+so nothing is lost.
+
+### Images never leave the device
+
+The browser build states this in the header, and it is the one genuine advantage
+it has over the server build. It is asserted by the engine rather than by
+`index.html`, so the server build — where it would be false — cannot
+accidentally claim it.
 
 ## Mirroring — the easy bug
 
@@ -281,11 +386,26 @@ intrinsic aspect ratio so it is never letterboxed inside its container.
 ```
 web/
 ├── index.html
+├── parity.html          driver surface for the parity harness
+├── .env.static          VITE_ENGINE=browser, loaded by `--mode static`
+├── scripts/
+│   └── stage-assets.mjs copies models + the ONNX runtime into public/
+├── public/              staged build inputs; gitignored except models.json
 └── src/
-    ├── main.ts      wiring, UI states, upload/capture flows
-    ├── camera.ts    getUserMedia, device selection, mirrored capture
-    ├── api.ts       fetch wrappers, timeouts, error extraction
-    ├── overlay.ts   canvas draw + bbox/confidence rendering
-    ├── types.ts     API response types
-    └── styles.css
+    ├── main.ts          wiring, UI states, upload/capture flows
+    ├── engine.ts        the interface the UI talks to, and the engine choice
+    ├── engine-server.ts the FastAPI path (a wrapper over api.ts)
+    ├── camera.ts        getUserMedia, device selection, mirrored capture
+    ├── api.ts           fetch wrappers, timeouts, error extraction
+    ├── overlay.ts       canvas draw + bbox/confidence rendering
+    ├── types.ts         API + models.json response types
+    ├── parity.ts        exposes window.__parity for the harness
+    ├── styles.css
+    └── browser/         the client-side inference path
+        ├── engine.ts    orchestration, lazy per-model loading
+        ├── yunet.ts     YuNet + a port of OpenCV's post-processing
+        ├── preprocess.ts port of server/preprocessing.py
+        ├── cv-resize.ts port of cv2.resize (INTER_AREA + INTER_LINEAR)
+        ├── decode.ts    port of the median decode in server/predictor.py
+        └── ort.ts       onnxruntime-web setup + progress-reporting fetch
 ```
