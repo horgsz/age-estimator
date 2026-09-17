@@ -949,6 +949,48 @@ that removing label smoothing underperforms — inverting this section's central
 result. Caught by the server session, which asked why only one of four
 checkpoints carried the `decode` key.
 
+### Conditioning, again — and the number neither table shows
+
+Every per-decade table above bins by **true** age. That is correct for model
+evaluation and wrong for a UI, which can only threshold on what the model
+outputs. Both views, median decode, real-GT test split:
+
+| band | by TRUE age (n / MAE / bias) | by DISPLAYED age (n / MAE / bias) |
+|---|---|---|
+| 0-9 | 245 / 3.80 / +3.13 | 224 / 2.20 / −0.38 |
+| 10-19 | 344 / 6.99 / **+6.07** | 238 / 4.84 / **−2.12** |
+| 40-49 | 598 / 6.49 / −2.24 | 593 / 7.24 / +1.18 |
+| 70-79 | 195 / 8.96 / **−7.48** | 166 / 7.89 / −0.31 |
+| 80+ | 119 / 9.55 / **−8.69** | 59 / 6.20 / **+1.02** |
+
+**The signs invert.** Teens carry a +6.07 bias by true age and −2.12 by
+displayed age; 80+ carries −8.69 and +1.02. Both are correct. They answer
+different questions, and a caveat keyed to the wrong one fires on the wrong
+people — which has now happened three times in this project.
+
+One genuine improvement worth recording: under the real-GT model the
+displayed-age bias is **near zero in every band** (−0.71 to +1.18 across the UI
+bands), where the shipped model ran to **+7.31** at displayed 40-54. Conditioned
+on what it shows, the new model is close to unbiased; only precision degrades
+with age (MAE 2.72 at under-13 rising to 7.64 at 65+).
+
+**But neither table shows the number that matters for a gate.** At a hard
+threshold the two conditionings give wildly different error rates, because
+adults outnumber minors in this corpus:
+
+| threshold | true minors shown as adult | shown-adult actually minor |
+|---:|---:|---:|
+| 13 | 18.1% | 1.6% |
+| 16 | 25.6% | 2.8% |
+| **18** | **30.2%** | **4.2%** |
+| 21 | 34.3% | 6.6% |
+
+**30% of true under-18s are displayed as 18 or over** — by the *better* model;
+the shipped one is 40.3%. Read from the observable side the same gate looks 96%
+correct. That gap is pure base rate, and it is the strongest argument in this
+repo against using these predictions for anything gate-like. `predicted_age_bands.py`
+computes both directions precisely so neither can be quoted alone.
+
 ### What this does not show
 
 - **Not a better product model, necessarily.** If the goal is to predict how old
@@ -1037,5 +1079,6 @@ previously gated on it:
 | `publish_manifest.py` | sha256 + provenance sidecar (one per published artifact) |
 | `realgt_data.py` | real-GT corpus loader + the no-subject-leakage assertion |
 | `realgt_compare.py` | like-for-like old-vs-new on held-out splits, all decodes |
+| `predicted_age_bands.py` | error by *predicted* age + both threshold error rates |
 | `splits/` | committed train/val/test CSVs |
 | `reports/` | metrics, training history, scatter plot, external validation |
