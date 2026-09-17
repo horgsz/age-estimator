@@ -1110,6 +1110,17 @@ sibling of the per-model table rather than a field inside it, so its shape
 carries its scope. An unhoused number will acquire whatever scope its first
 reader assumes.
 
+A second corollary, about tests. Every check in this project that caught one of
+these failures looked pedantic when written: asserting state-dict keys are bare,
+comparing artifact sha256s for equality, asserting an exact dict rather than a
+subset. All three would have been easy to argue down as over-specification,
+because in each case the *behaviour* was fine — the model loaded, the file was
+valid, the endpoint responded. Only the provenance was wrong. Behavioural tests
+cannot see that class of bug by construction, so the checks that catch it are
+necessarily the ones that look like they are testing nothing. That is a
+test-*design* point rather than a test-*effort* one, and it belongs with the rest
+of this list: structure over vigilance.
+
 ### What this does not show
 
 - **Not a better product model, necessarily.** If the goal is to predict how old
