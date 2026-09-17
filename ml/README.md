@@ -208,6 +208,11 @@ Test split (1,185 held-out images), `checkpoints/age_model.pt`:
 > residual is label noise, and some counted errors are likely correct
 > predictions on mislabelled faces. See
 > [Label provenance](#label-provenance--read-before-quoting-the-mae).
+>
+> **This is now measured, not just asserted.** Against documented chronological
+> ages on APPA-REAL the same checkpoint scores **8.52**, not 5.55. See
+> [External validation](#external-validation--measured-against-real-ages-not-dex-labels).
+> Quote that number, not this one, for any claim about real-world age accuracy.
 
 | metric | value |
 | --- | --- |
@@ -507,19 +512,194 @@ forgiving one. Anything in [-0.05, +0.05] is within 0.21 years.
 Settling the constant properly would need real full-frame photographs with known
 tight crops; synthetic canvases cannot do it, and UTKFace cannot supply them.
 
+**Update: APPA-REAL supplied them.** See the margin sweep in the external
+validation section below, which re-runs this curve on real full-scene
+photographs. The optimum there is about -0.05 rather than 0.0 — so full-frame
+detections are indeed slightly *wider* relative to the face, the direction this
+section predicted but could not measure. The penalty for shipping 0.0 is ~0.42
+years on that corpus, inside the tolerance claimed above.
+
+## External validation — measured against real ages, not DEX labels
+
+> **These are out-of-corpus numbers and are not comparable to the in-corpus
+> figures above.** Everything above is agreement with UTKFace's DEX-generated
+> labels. Everything in this section is error against *documented chronological
+> age* on corpora the model never saw. The two answer different questions and
+> the numbers must not be quoted interchangeably. The artifact was not modified
+> to produce these, and `meta["test_mae"]` still holds the in-corpus figure.
+
+Reproduce with:
+
+```bash
+python ml/external_eval.py --datasets appa fgnet      # measure
+python ml/external_analysis.py                        # decompose
+```
+
+Both corpora are non-commercial research use only and stay gitignored under
+`data/`. APPA-REAL ships pre-cropped faces at a 40% margin; we deliberately do
+not use them, because 40% is far outside our verified safe band and would have
+measured the crop bug rather than the model. YuNet runs on the original images
+with the serving crop geometry at margin 0.0, decoding with the shipped median.
+
+### Headline
+
+| corpus | target | n | MAE | CS@5 | bias |
+| --- | --- | --- | --- | --- | --- |
+| APPA-REAL | `real_age` (chronological) | 7,534 | **8.52** | 46.2% | +2.81 |
+| APPA-REAL | `apparent_age_avg` (crowd) | 7,534 | **7.53** | 49.4% | +3.05 |
+| FG-NET | real age | 998 | 7.01 | 57.1% | +5.76 |
+| FG-NET | real age, colour + unpadded only | 619 | 6.01 | 63.2% | +4.53 |
+
+Detection failure was 0.75% on APPA-REAL and 0.40% on FG-NET, so nothing here
+is survivorship over a weak detector.
+
+**The in-corpus 4.76 does not survive contact with chronological age.** Against
+real ages the model is at 8.52. That gap is the honest answer to "how much of
+our number was label agreement", and it is large. What follows is the
+decomposition of *why*, because the parts behave very differently.
+
+### The model predicts apparent age, and the slope proves it better than the MAE
+
+Scoring against `apparent_age_avg` instead of `real_age` improves MAE by only
+about one year (8.52 → 7.53), which on its own looks like weak evidence. The
+regression slopes are far more decisive:
+
+| target | slope | R² |
+| --- | --- | --- |
+| `real_age` | 0.817 | 0.617 |
+| `apparent_age_avg` | **0.935** | **0.671** |
+
+A slope of 1.0 means the target is tracked with no scale compression. Against
+apparent age we are at 0.935 — nearly calibrated. Against chronological age we
+are at 0.817, i.e. systematically compressed toward the middle. **The model is a
+well-calibrated predictor of how old a face looks, and a compressed predictor of
+how old the person is.** That is precisely what training on DEX-generated labels
+should produce, and it is the cleanest confirmation we have that the UTKFace
+label-provenance caveat is not merely theoretical.
+
+Our error also correlates **+0.445** with the human apparent-vs-real gap on the
+same faces (19.8% shared variance): when humans misjudge a face, we tend to
+misjudge it in the same direction. The residual is not arbitrary noise.
+
+### The elderly result: at 70-79 we are level with a single human
+
+This reframes the worst-looking number in the in-corpus report. Per decade,
+conditioned on true age, against chronological age:
+
+| band | n | our MAE vs real | our MAE vs apparent | our bias | 34-rater crowd | **single rater** |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0-9 | 661 | 4.79 | 4.40 | +4.31 | 1.17 | 1.52 |
+| 10-19 | 1202 | 8.47 | 6.84 | +7.42 | 3.82 | 4.50 |
+| 20-29 | 2056 | 7.83 | 6.81 | +4.17 | 3.40 | 4.65 |
+| 30-39 | 1552 | 9.55 | 8.68 | +1.99 | 4.21 | 5.80 |
+| 40-49 | 935 | 10.30 | 9.57 | +0.56 | 5.36 | 6.97 |
+| 50-59 | 608 | 8.08 | 7.91 | +0.44 | 5.39 | 6.76 |
+| 60-69 | 278 | 9.36 | 8.71 | −2.90 | 6.07 | 7.39 |
+| 70-79 | 130 | **10.08** | 8.07 | −7.12 | 8.43 | **10.01** |
+| 80+ | 112 | 13.01 | 8.44 | −11.85 | 9.75 | **10.02** |
+
+The widely-quoted human figure for this dataset is 4.12 years, but that is the
+mean of ~34 raters, which averages rater noise away. One model should be
+compared against *one* rater. APPA-REAL publishes per-image inter-rater standard
+deviation (mean 4.34 years), so a single rater's expected error can be recovered
+by re-injecting that spread: **5.32 years overall**, not 4.12.
+
+On that fair comparison:
+
+- At **70-79 we are at 10.08 against a single human's 10.01** — statistically
+  indistinguishable.
+- At **80+ we are at 13.01 against 10.02** — worse, but the same order, not a
+  different regime.
+- Our bias at 70-79 is −7.12 where the *human crowd's* own bias is −7.99. We
+  underestimate the elderly slightly **less** than the human consensus does.
+
+So the old-age bias is mostly not a defect in our model. Faces at that age
+genuinely read younger than their chronological age to human observers, the
+labels we trained on encode that perception, and we reproduce it. Scored against
+what humans actually perceive, our 80+ MAE falls from 13.01 to **8.44** and the
+bias from −11.85 to −4.96.
+
+This does not make the residual acceptable for a product that claims to estimate
+age — it means the remaining headroom is much smaller than the in-corpus table
+implied, and that closing it needs better targets, not just a better model.
+
+The one band where we are clearly and unarguably worse than humans is **10-19**
+(8.47 against a single rater's 4.50, bias +7.42). Teenagers are where our real
+weakness is, not the elderly. That is a genuinely new finding — it is invisible
+in-corpus, where 10-19 looked mid-table.
+
+### FG-NET: separating image quality from age reasoning
+
+FG-NET is 44.3% under age 12 (444 of 1,002 images across 82 subjects), roughly
+ten times APPA-REAL's child density, which is why it is here.
+
+**FG-NET says nothing whatsoever about the elderly end.** Parsing all 1,002
+filenames gives an age range of **0 to 69 with zero images above 69**. Any
+old-age conclusion drawn from FG-NET would be vacuous.
+
+It is also scanned film — much of it black and white, variable quality, not
+pre-aligned — so some error is image quality rather than age reasoning. Those
+separate cleanly. Comparing grayscale against colour *within a single age band*
+(under 20), which breaks the confound that older photographs are both more
+likely to be B&W and of younger subjects:
+
+| subset (age < 20) | n | MAE | bias |
+| --- | --- | --- | --- |
+| colour | 545 | 5.44 | +4.98 |
+| grayscale | 161 | **9.53** | **+9.39** |
+
+Grayscale alone costs ~4.4 years of bias at matched age. A further effect comes
+from framing: 21.9% of FG-NET crops needed padding because the square crop ran
+off the edge of an already-tight scan, and those score 8.80 against 6.51 for the
+rest.
+
+On the cleanest subset (colour, no padding) the under-12 result is:
+
+| under-12 subset | n | MAE | CS@5 | bias |
+| --- | --- | --- | --- | --- |
+| all | 440 | 5.22 | 77.3% | +4.88 |
+| colour only | 346 | 3.94 | 84.4% | +3.54 |
+| colour + unpadded | 288 | **3.62** | **85.8%** | **+3.17** |
+
+So on clean images of young children the model is at **3.62 MAE against real
+chronological age** — its strongest external result, and consistent with the
+server's finding that displayed-age-under-12 is the model's best region. Roughly
+a third of the raw FG-NET child error was film stock, not face reasoning.
+
+A residual **+3.17 bias on children against real age** remains. Note this is the
+opposite sign to what a mean-reverting decode would produce at the young
+boundary, and the median decode already removed that mechanism — so this is not
+the pedestal effect returning. It is consistent with UTKFace's DEX labels
+systematically reading children as older, which is the label-bias branch of the
+earlier discriminator, now with an independent corpus behind it.
+
+### What this changes, and what it does not
+
+- **The margin constant is confirmed, and its one untested assumption is now
+  tested.** On real full-scene photographs the optimum is ~-0.05 rather than
+  0.0, costing ~0.42 years at the shipped setting. Worth revisiting; not worth
+  an emergency change.
+- **The old-age bias is mostly perceptual and partly inherited**, not a training
+  defect. Our 70-79 error matches a single human's.
+- **Teenagers (10-19) are the real weak spot**, and that was invisible in-corpus.
+- **A third of our headline accuracy was label agreement.** 4.76 in-corpus
+  against 8.52 vs chronological age is the size of that effect.
+- **None of this is fixed by a decode change.** These are target and training
+  distribution problems.
+
 ## Future work
 
-The single highest-value next step is to **validate against labels of
-independent provenance**. Everything in this README is measured against
-DEX-generated labels, so it cannot distinguish model error from label error —
-and the residual old-age bias in particular is un-diagnosable from inside
-UTKFace. Three corpora with documented real ages would settle it:
+**Done: APPA-REAL and FG-NET.** What was previously the top item here has been
+carried out; see the external validation section above. The short version is
+that it confirmed the caveat rather than dispelling it — the model is a
+well-calibrated predictor of *apparent* age (slope 0.935) and a compressed
+predictor of chronological age (slope 0.817), and roughly a third of the
+headline accuracy was label agreement.
 
-| dataset | why |
-| --- | --- |
-| **FG-NET** | real ages from dated personal photographs; strong child/teen coverage, which is exactly where our residual bias sits |
-| **AgeDB** | manually collected and verified real ages, wide age range, good 70+ support where UTKFace is thinnest |
-| **APPA-REAL** | carries *both* real and apparent-age labels, so it can separate "wrong" from "looks that age" — the distinction our metric currently cannot make |
+**Still outstanding: AgeDB.** It is manually collected and verified, with wide
+age range and good 70+ support where both UTKFace and FG-NET are thinnest. Our
+80+ estimate currently rests on 112 APPA-REAL images and nothing else, which is
+the weakest-supported claim in this README.
 
 A sharper version of the same point, raised by the server session: because
 UTKFace labels are themselves softmax-expectation estimates, and expectation
@@ -537,12 +717,19 @@ version of the worry (a pure label-generation-geometry artefact) while leaving
 the broader one (label *values* produced by expectation decoding) untouched.
 APPA-REAL remains the only thing that settles it.
 
-Running the shipped checkpoint over these unchanged would give a true-error
-figure to sit beside the in-corpus 5.547, and the gap between them is the
-label-noise floor we can currently only assert. Also worth revisiting once
-that baseline exists: a class-balanced or age-weighted loss for the thin tails,
-which was not attempted here because in-corpus validation could not have told
-us whether it helped or merely fit the labels' bias more closely.
+Now that a real-age baseline exists, two follow-ups are unblocked and were
+previously gated on it:
+
+- **A class-balanced or age-weighted loss for the thin tails.** This was
+  deliberately not attempted before, because in-corpus validation could not
+  distinguish "helped" from "fit the labels' bias more closely". It now can.
+  The external data also sharpens the target: **10-19 is our real weak spot**
+  (MAE 8.47 against a single rater's 4.50), not the elderly, so any reweighting
+  should be aimed there rather than at 80+ as the in-corpus table suggested.
+- **Training against apparent-age labels directly.** APPA-REAL ships them, and
+  the slope analysis shows that is effectively the function we already compute.
+  Making it explicit would let the uncertainty interval mean something
+  well-defined, rather than straddling two different targets.
 
 ### Known-stale measurements
 
@@ -566,5 +753,9 @@ us whether it helped or merely fit the labels' bias more closely.
 | `export_onnx.py` | ONNX export + parity verification |
 | `measure_crop_margin.py` | YuNet margin measurement (serving/training framing) |
 | `margin_sweep.py` | MAE vs. crop-margin sensitivity |
+| `decode_compare.py` | expectation vs mode vs median decode comparison |
+| `external_eval.py` | APPA-REAL / FG-NET evaluation against real ages (read-only) |
+| `external_analysis.py` | decomposes external error into model, perception and label terms |
+| `publish_manifest.py` | sha256 + provenance sidecar for the published artifact |
 | `splits/` | committed train/val/test CSVs |
-| `reports/` | metrics, training history, scatter plot |
+| `reports/` | metrics, training history, scatter plot, external validation |
