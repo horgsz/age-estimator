@@ -69,6 +69,33 @@ is named that way so the two can never be confused — do not relabel it
 `sha256` is the first 12 hex chars of the digest of the file's bytes, so it is
 directly comparable with `shasum -a 256 <path> | cut -c1-12`.
 
+### The accuracy figures are pinned to one artifact
+
+`in_corpus_mae_utkface` and `real_age_mae_appa_real` are emitted **only** when
+the loaded checkpoint's `sha256` matches the artifact they were measured on
+(`56894c480044`). Any other checkpoint reports them as `null` with an
+`accuracy_note` saying so.
+
+This matters because sibling artifacts exist — a real-ground-truth retrain and
+no-smoothing variants — and pointing `AGE_MODEL_PATH` at one to evaluate it
+would otherwise make `/health` report *this* model's accuracy for *that* model's
+weights. Accuracy is a property of a specific set of weights, not of "the
+model", so an unrecognised artifact fails closed rather than inheriting numbers
+it never earned. Re-run `server/tools/eval_end_to_end.py` to measure a new one.
+
+### `serving_decode` follows the checkpoint
+
+A checkpoint may declare `meta["decode"]`; if it does, we serve that decode and
+log the override. Absent the key we default to `median`, which is correct for
+the shipped artifact.
+
+The right decode is a property of **how the model was trained**, not a fixed
+choice. With `label_smoothing=0.1` a uniform pedestal (whose own expectation is
+exactly 50) drags an expectation decode toward the middle, so median wins by
+~0.2–0.4 years. Trained *without* smoothing the sign flips and expectation wins
+by ~0.12. Hardcoding either one silently leaves accuracy on the table the next
+time training changes — hence the key, and hence that we honour it.
+
 This exists because the checkpoint was twice republished to the same path
 mid-evaluation, silently invalidating measurements taken against it. `test_mae`
 alone is not sufficient to tell two artifacts apart — the second republish kept

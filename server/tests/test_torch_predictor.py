@@ -7,12 +7,19 @@ trained model.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from conftest import FakeDetector
 
 from server import config
-from server.predictor import StubPredictor, TorchPredictor, load_predictor
+from server.predictor import (
+    MEASURED_DIGEST,
+    StubPredictor,
+    TorchPredictor,
+    load_predictor,
+)
 
 torch = pytest.importorskip("torch")
 timm = pytest.importorskip("timm")
@@ -20,25 +27,28 @@ timm = pytest.importorskip("timm")
 BACKBONE = "mobilenetv3_small_100"
 
 
+def _write_checkpoint(directory, *, decode=None, name="age_model.pt"):
+    """Save a contract-shaped checkpoint, optionally declaring a decode."""
+    directory.mkdir(parents=True, exist_ok=True)
+    model = timm.create_model(BACKBONE, pretrained=False, num_classes=config.NUM_BINS)
+    meta = {
+        "backbone": BACKBONE,
+        "num_bins": 101,
+        "input_size": 224,
+        "mean": [0.485, 0.456, 0.406],
+        "std": [0.229, 0.224, 0.225],
+        "test_mae": 5.43,
+    }
+    if decode is not None:
+        meta["decode"] = decode
+    path = directory / name
+    torch.save({"state_dict": model.state_dict(), "meta": meta}, path)
+    return path
+
+
 @pytest.fixture(scope="module")
 def checkpoint(tmp_path_factory):
-    model = timm.create_model(BACKBONE, pretrained=False, num_classes=config.NUM_BINS)
-    path = tmp_path_factory.mktemp("ckpt") / "age_model.pt"
-    torch.save(
-        {
-            "state_dict": model.state_dict(),
-            "meta": {
-                "backbone": BACKBONE,
-                "num_bins": 101,
-                "input_size": 224,
-                "mean": [0.485, 0.456, 0.406],
-                "std": [0.229, 0.224, 0.225],
-                "test_mae": 5.43,
-            },
-        },
-        path,
-    )
-    return path
+    return _write_checkpoint(tmp_path_factory.mktemp("ckpt"))
 
 
 def test_torch_predictor_loads_the_contract_checkpoint(checkpoint, face_bgr):
@@ -186,18 +196,118 @@ def test_no_deviation_warning_for_a_contract_shaped_checkpoint(checkpoint, caplo
 def test_health_does_not_present_in_corpus_mae_as_real_accuracy(checkpoint):
     """UTKFace labels are DEX estimates, so in-corpus MAE is not accuracy.
 
-    Both figures are served so the distinction travels with the number. The
-    real-age figure must be present and must be the larger of the two -- if a
-    future change makes the in-corpus number look like the headline, a caller
-    would understate the error a user actually experiences by ~4 years.
+    Both figures are published so the distinction travels with the number. The
+    real-age figure must be the larger of the two -- if a future change makes
+    the in-corpus number look like the headline, a caller would understate the
+    error a user actually experiences by ~4 years.
+    """
+    from server.predictor import MEASURED_ACCURACY
+
+    assert MEASURED_ACCURACY["real_age_mae_appa_real"] == pytest.approx(8.52)
+    assert MEASURED_ACCURACY["in_corpus_mae_utkface"] == pytest.approx(4.762)
+    assert (
+        MEASURED_ACCURACY["real_age_mae_appa_real"]
+        > MEASURED_ACCURACY["in_corpus_mae_utkface"]
+    )
+    assert "DEX" in MEASURED_ACCURACY["accuracy_note"]
+
+    # The recorded checkpoint figure is in-corpus too, and must never be the
+    # only MAE on offer.
+    info = TorchPredictor(str(checkpoint), detector=FakeDetector([])).describe_checkpoint()
+    assert "recorded_test_mae" in info
+    assert "accuracy_note" in info
+
+
+def test_accuracy_figures_are_withheld_for_an_unmeasured_checkpoint(checkpoint):
+    """Accuracy belongs to a set of weights, not to "the model".
+
+    Our 4.762/8.52 figures were measured on one specific artifact. Sibling
+    checkpoints exist (a real-ground-truth retrain, and no-smoothing variants),
+    and pointing AGE_MODEL_PATH at one to evaluate it must not make /health
+    report another model's accuracy as though it were measured. Fails closed.
     """
     predictor = TorchPredictor(str(checkpoint), detector=FakeDetector([]))
     info = predictor.describe_checkpoint()
 
-    assert info["real_age_mae_appa_real"] == pytest.approx(8.52)
-    assert info["in_corpus_mae_utkface"] == pytest.approx(4.762)
-    assert info["real_age_mae_appa_real"] > info["in_corpus_mae_utkface"]
-    # The recorded checkpoint figure is in-corpus too, and must never be the
-    # only MAE on offer.
-    assert "recorded_test_mae" in info
-    assert "accuracy_note" in info and "DEX" in info["accuracy_note"]
+    assert info["sha256"] != MEASURED_DIGEST
+    assert info["in_corpus_mae_utkface"] is None
+    assert info["real_age_mae_appa_real"] is None
+    assert "Unmeasured" in info["accuracy_note"]
+    # The identity of the artifact we *did* measure stays discoverable, so the
+    # mismatch can be diagnosed rather than merely observed.
+    assert MEASURED_DIGEST in info["accuracy_note"]
+
+
+def test_declared_decode_is_honoured_not_silently_ignored(tmp_path, caplog):
+    """A checkpoint's meta["decode"] selects the point estimate.
+
+    The right decode is a property of training, not a fixed choice: label
+    smoothing creates a uniform pedestal that drags an expectation decode toward
+    the middle, so median wins by ~0.2-0.4 years. Trained without smoothing the
+    sign flips and expectation wins by ~0.12. Hardcoding either one leaves
+    accuracy on the table the next time training changes.
+    """
+    path = _write_checkpoint(tmp_path, decode="expectation")
+    with caplog.at_level(logging.WARNING):
+        predictor = TorchPredictor(str(path), detector=FakeDetector([]))
+
+    assert predictor.decode == "expectation"
+    assert predictor.describe_checkpoint()["serving_decode"] == "expectation"
+    # Silently changing how every age is computed is exactly the kind of switch
+    # that must appear in the log.
+    assert any("decode" in r.getMessage() for r in caplog.records)
+
+
+def test_absent_decode_key_defaults_to_median(checkpoint):
+    """The shipped artifact predates meta["decode"]; it must keep its decode."""
+    predictor = TorchPredictor(str(checkpoint), detector=FakeDetector([]))
+    assert predictor.decode == "median"
+
+
+def test_unsupported_decode_falls_back_loudly(tmp_path, caplog):
+    """An unknown decode must not silently serve something else."""
+    path = _write_checkpoint(tmp_path, decode="mode")
+    with caplog.at_level(logging.WARNING):
+        predictor = TorchPredictor(str(path), detector=FakeDetector([]))
+
+    assert predictor.decode == "median"
+    assert any("unsupported" in r.getMessage().lower() for r in caplog.records)
+
+
+def test_expectation_decode_changes_the_reported_age(tmp_path):
+    """The declared decode must actually reach the number a user sees.
+
+    Guards the wiring, not the maths: a decode key that is parsed, logged and
+    reported by /health but never consumed by ``_estimate`` would pass every
+    other test here. Uses the pedestal shape where the two decodes provably
+    disagree -- 0.9 mass on bin 8 plus 0.1 uniform gives median 8 but
+    expectation ~12.2 -- so a decode that silently fell back to median could
+    not satisfy both assertions.
+    """
+    import numpy as np
+
+    median_p = TorchPredictor(
+        str(_write_checkpoint(tmp_path / "a", decode="median")), detector=FakeDetector([])
+    )
+    expect_p = TorchPredictor(
+        str(_write_checkpoint(tmp_path / "b", decode="expectation")), detector=FakeDetector([])
+    )
+    assert (median_p.decode, expect_p.decode) == ("median", "expectation")
+
+    probs = np.full((1, 101), 0.1 / 101, dtype=np.float64)
+    probs[0, 8] += 0.9
+    logits = torch.from_numpy(np.log(probs)).float()
+
+    class _Fixed:
+        def __call__(self, _):
+            return logits
+
+        def eval(self):
+            return self
+
+    median_p.model = _Fixed()
+    expect_p.model = _Fixed()
+    batch = np.zeros((1, 3, 224, 224), dtype=np.float32)
+
+    assert median_p._estimate(batch).age[0] == pytest.approx(8.0)
+    assert expect_p._estimate(batch).age[0] == pytest.approx(12.2, abs=0.3)

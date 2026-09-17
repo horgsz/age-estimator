@@ -58,6 +58,30 @@ MAX_AGE = 100.0
 # which matters because these distributions are visibly skewed at the tails.
 LOW_Q, HIGH_Q = 0.16, 0.84
 
+# Decodes we know how to serve. A checkpoint may declare its own via
+# meta["decode"]; see TorchPredictor for why we honour it.
+SUPPORTED_DECODES = ("median", "expectation")
+DEFAULT_DECODE = "median"
+
+# The exact artifact our own accuracy figures were measured on, and those
+# figures. Pinned together deliberately: accuracy is a property of a specific
+# set of weights, not of "the model", so swapping the checkpoint must invalidate
+# the numbers rather than silently relabel another model's performance.
+MEASURED_DIGEST = "56894c480044"
+MEASURED_ACCURACY = {
+    # Measured against UTKFace labels, which are themselves DEX-algorithm
+    # estimates -- so this is agreement with a labelling method, not accuracy.
+    "in_corpus_mae_utkface": 4.762,
+    # Measured against real chronological ages (APPA-REAL, 7,534 images). This
+    # is the number any user-facing surface must quote.
+    "real_age_mae_appa_real": 8.52,
+    "accuracy_note": (
+        "in_corpus_mae_utkface measures agreement with UTKFace's "
+        "DEX-derived labels. real_age_mae_appa_real is the error "
+        "against real chronological age and is the user-facing number."
+    ),
+}
+
 
 @dataclass(frozen=True)
 class FaceResult:
@@ -128,6 +152,9 @@ class AgePredictor:
     #: Reported by ``GET /health``.
     model_name = "base"
     is_stub = True
+    #: How the 101-bin distribution becomes a point estimate. Overridden per
+    #: checkpoint by ``TorchPredictor``, which honours ``meta["decode"]``.
+    decode = DEFAULT_DECODE
 
     def __init__(self, model_path: str | None = None, detector: FaceDetector | None = None) -> None:
         self.model_path = model_path
@@ -314,45 +341,87 @@ class TorchPredictor(AgePredictor):
         self._size_bytes = path.stat().st_size
 
         self._bins = torch.arange(self.num_bins, dtype=torch.float32)
+
+        # Honour the checkpoint's declared decode. This exists because the right
+        # decode is a property of how the model was TRAINED, not a fixed choice:
+        # with label smoothing a uniform pedestal (own expectation exactly 50)
+        # drags an expectation decode toward the middle, so the median wins by
+        # ~0.2-0.4 years. Remove the smoothing and the sign flips -- expectation
+        # then wins by ~0.12. Hardcoding either one silently leaves accuracy on
+        # the table the next time training changes.
+        declared = self.meta.get("decode")
+        if declared is None:
+            self.decode = DEFAULT_DECODE
+        elif str(declared) in SUPPORTED_DECODES:
+            self.decode = str(declared)
+            if self.decode != DEFAULT_DECODE:
+                log.warning(
+                    "Checkpoint declares decode=%r, overriding the default %r. "
+                    "Serving the checkpoint's choice.",
+                    self.decode,
+                    DEFAULT_DECODE,
+                )
+        else:
+            self.decode = DEFAULT_DECODE
+            log.warning(
+                "Checkpoint declares unsupported decode=%r; falling back to %r. "
+                "Supported: %s.",
+                declared,
+                DEFAULT_DECODE,
+                ", ".join(SUPPORTED_DECODES),
+            )
+
         log.info(
             "Loaded age model %s (%d bins, input %d) from %s; "
-            "sha256:%s, reported test MAE: %s",
+            "sha256:%s, decode: %s, recorded test MAE: %s",
             self.model_name,
             self.num_bins,
             self.input_size,
             path,
             self._digest,
+            self.decode,
             meta.get("test_mae", "n/a"),
         )
 
     def describe_checkpoint(self) -> dict | None:
         test_mae = self.meta.get("test_mae")
-        return {
+        info = {
             "path": str(self.model_path),
             "sha256": self._digest,
             "bytes": self._size_bytes,
             # The checkpoint's own recorded figure, NOT the accuracy of what we
-            # serve. It was measured with the soft-expectation decode; we ship
-            # the median decode. Reported under a name that cannot be mistaken
-            # for current accuracy.
+            # serve. Reported under a name that cannot be mistaken for current
+            # accuracy. `recorded_test_mae_decode` says which decode produced
+            # it, since that alone is worth ~0.2-0.4 years.
             "recorded_test_mae": round(float(test_mae), 4) if test_mae is not None else None,
-            "recorded_test_mae_decode": "expectation",
-            "serving_decode": "median",
-            # Both of the above, and our own 4.762 end-to-end figure, are
-            # measured against UTKFace labels -- which are themselves
-            # DEX-algorithm estimates. They measure agreement with a labelling
-            # method, not accuracy against real age. Against real chronological
-            # ages (APPA-REAL, 7,534 images) the MAE is 8.52. Anything shown to
-            # a user must quote that number, so it is served here alongside the
-            # in-corpus one rather than left in a README nobody reads.
-            "in_corpus_mae_utkface": 4.762,
-            "real_age_mae_appa_real": 8.52,
-            "accuracy_note": (
-                "in_corpus_mae_utkface measures agreement with UTKFace's "
-                "DEX-derived labels. real_age_mae_appa_real is the error "
-                "against real chronological age and is the user-facing number."
-            ),
+            "recorded_test_mae_decode": str(self.meta.get("decode", "expectation")),
+            "serving_decode": self.decode,
         }
+
+        # Our own measured accuracy figures are pinned to the exact artifact
+        # they were measured on. They are NOT properties of "the model" -- point
+        # AGE_MODEL_PATH at a different checkpoint and they become fiction. This
+        # is the same failure the whole accuracy-labelling exercise was about,
+        # so it fails closed: an unrecognised artifact reports nulls and says
+        # why, rather than confidently serving another model's numbers.
+        if self._digest == MEASURED_DIGEST:
+            info.update(MEASURED_ACCURACY)
+        else:
+            info.update(
+                {
+                    "in_corpus_mae_utkface": None,
+                    "real_age_mae_appa_real": None,
+                    "accuracy_note": (
+                        "Unmeasured artifact: this checkpoint is not the one our "
+                        f"accuracy figures were measured on (expected sha256 "
+                        f"{MEASURED_DIGEST}). Its own recorded_test_mae is not "
+                        "comparable across corpora -- real-age and DEX-label MAE "
+                        "measure different things. Re-run server/tools/"
+                        "eval_end_to_end.py before quoting any number."
+                    ),
+                }
+            )
+        return info
 
     def _estimate(self, batch: np.ndarray) -> Decoded:
         torch = self._torch
@@ -360,7 +429,9 @@ class TorchPredictor(AgePredictor):
             logits = self.model(torch.from_numpy(batch))
             probs = torch.softmax(logits.float(), dim=1)
 
-            # Soft-expectation decode: kept for comparison, no longer shipped.
+            # Soft-expectation decode. Always computed: it is the point estimate
+            # when the checkpoint declares decode="expectation", and otherwise
+            # it is retained for comparison.
             expectation = (probs * self._bins).sum(dim=1)
             var = (probs * (self._bins.unsqueeze(0) - expectation.unsqueeze(1)) ** 2).sum(dim=1)
             std = torch.sqrt(torch.clamp(var, min=0.0))
@@ -376,8 +447,13 @@ class TorchPredictor(AgePredictor):
 
             median, low, high = q(0.5), q(LOW_Q), q(HIGH_Q)
 
+        # The interval stays the CDF quantiles under either decode: it needs no
+        # symmetry assumption, and sigma is inflated by any label-smoothing
+        # pedestal in exactly the way the point estimate is.
+        age = expectation if self.decode == "expectation" else median
+
         return Decoded(
-            age=median.numpy(),
+            age=age.numpy(),
             low=low.numpy(),
             high=high.numpy(),
             expectation=expectation.numpy(),
