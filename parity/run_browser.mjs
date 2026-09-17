@@ -82,6 +82,7 @@ async function main() {
       cases: { type: 'string', default: 'parity/fixtures/cases.json' },
       out: { type: 'string', default: 'parity/browser.json' },
       url: { type: 'string' },
+      throttle: { type: 'string' },
     },
   });
 
@@ -155,7 +156,13 @@ async function main() {
 
   // Cold-load timing for a first-time visitor, measured last so the warm run
   // above cannot have primed it.
-  const cold = await measureColdLoad(browser, pageUrl, join(fixturesDir, spec.cases[0].image), spec.cases[0].model);
+  const cold = await measureColdLoad(
+    browser,
+    pageUrl,
+    join(fixturesDir, spec.cases[0].image),
+    spec.cases[0].model,
+    values.throttle ?? null,
+  );
   console.log(
     `  cold load: nav ${cold.navigationMs}ms, first result ${cold.firstResultMs}ms, ` +
       `${(cold.transferredBytes / 1048576).toFixed(2)} MB transferred`,
@@ -189,10 +196,35 @@ async function main() {
  * Reporting `DOMContentLoaded` instead would be flattering and useless: the
  * page is interactive within a few hundred milliseconds and then does nothing
  * visible until the model lands.
+ *
+ * `--throttle` applies a network profile through CDP, because an unthrottled
+ * number measured from a datacentre or over loopback says nothing about the
+ * experience this UX was designed around. The download is ~9 MB compressed and
+ * the whole point of the progress bar is the case where that takes a while.
  */
-async function measureColdLoad(browser, pageUrl, imagePath, model) {
+const THROTTLE_PROFILES = {
+  // Roughly the "Fast 4G" and "Slow 4G" presets in Chrome DevTools, plus a
+  // deliberately unkind one. Throughput is bytes/second.
+  '4g': { downloadThroughput: (10 * 1024 * 1024) / 8, uploadThroughput: (3 * 1024 * 1024) / 8, latency: 40 },
+  'slow-4g': { downloadThroughput: (1.6 * 1024 * 1024) / 8, uploadThroughput: (750 * 1024) / 8, latency: 150 },
+  '3g': { downloadThroughput: (400 * 1024) / 8, uploadThroughput: (400 * 1024) / 8, latency: 400 },
+};
+
+async function measureColdLoad(browser, pageUrl, imagePath, model, throttle) {
   const context = await browser.newContext();
   const page = await context.newPage();
+
+  if (throttle) {
+    const profile = THROTTLE_PROFILES[throttle];
+    if (!profile) {
+      throw new Error(
+        `unknown --throttle ${throttle}; known: ${Object.keys(THROTTLE_PROFILES).join(', ')}`,
+      );
+    }
+    const session = await context.newCDPSession(page);
+    await session.send('Network.enable');
+    await session.send('Network.emulateNetworkConditions', { offline: false, ...profile });
+  }
 
   const transferred = { total: 0, byType: {} };
   page.on('response', (response) => {
@@ -216,6 +248,7 @@ async function measureColdLoad(browser, pageUrl, imagePath, model) {
 
   await context.close();
   return {
+    throttle: throttle ?? 'none',
     navigationMs,
     firstResultMs,
     detectMs: response.timings.detectMs,

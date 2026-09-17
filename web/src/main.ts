@@ -161,6 +161,10 @@ function renderModelPicker(info: ModelsInfo): void {
       selectedModel = model.key;
       syncAccuracyCopy();
       showModelNote();
+      // The other model is a separate 6.2 MB download, so selecting it is
+      // itself the signal to start fetching it.
+      prefetched = false;
+      prefetchModel();
       // Re-analyse the retained pixels rather than re-capturing: comparing two
       // models is only meaningful on byte-identical input.
       if (lastCanvas) void analyseCanvas(lastCanvas);
@@ -312,6 +316,35 @@ function showResult(faces: FaceResult[], width: number, height: number): void {
         : `Found ${faces.length} faces. Each range is that face’s uncertainty.`,
     );
   }
+}
+
+/**
+ * Start fetching the active model as soon as the user shows intent.
+ *
+ * The model is 6.2 MB and the WASM runtime another 2.9 MB compressed. Measured
+ * against the deployed site, a first-time visitor waits ~0.5 s on a fast
+ * connection, ~8.9 s on 10 Mbit, and ~46 s on 1.6 Mbit. Starting that download
+ * only when the shutter is pressed means the whole of it lands after the user
+ * has finished doing their part.
+ *
+ * So it starts on the first sign that an estimate is coming -- enabling the
+ * camera, opening the file picker, dragging a file over the page -- which are
+ * all followed by several seconds of human latency the download can hide
+ * behind. It is still not fetched for someone who only reads the page, which
+ * is the point of not doing it at boot.
+ *
+ * Deliberately fire-and-forget: a failure here must not surface as an error,
+ * because the user has not asked for anything yet. `analyseCanvas` awaits the
+ * same promise and reports failures there, where they mean something.
+ */
+let prefetched = false;
+function prefetchModel(): void {
+  if (prefetched || !engine || busy) return;
+  prefetched = true;
+  void engine.prepare(selectedModel, showLoadProgress).catch(() => {
+    // Retried, and reported, on the first real request.
+    prefetched = false;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +505,7 @@ async function startCamera(deviceId?: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 ui.enableCamera.addEventListener('click', () => {
+  prefetchModel();
   void startCamera(ui.deviceSelect.value || undefined);
 });
 
@@ -491,7 +525,10 @@ ui.capture.addEventListener('click', () => {
   }
 });
 
-ui.chooseFile.addEventListener('click', () => ui.fileInput.click());
+ui.chooseFile.addEventListener('click', () => {
+  prefetchModel();
+  ui.fileInput.click();
+});
 
 ui.reanalyse.addEventListener('click', () => {
   if (lastCanvas) void analyseCanvas(lastCanvas);
@@ -510,7 +547,10 @@ ui.fileInput.addEventListener('change', () => {
   ui.fileInput.value = '';
 });
 
-ui.dropzone.addEventListener('click', () => ui.fileInput.click());
+ui.dropzone.addEventListener('click', () => {
+  prefetchModel();
+  ui.fileInput.click();
+});
 ui.dropzone.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();
@@ -521,6 +561,7 @@ ui.dropzone.addEventListener('keydown', (event) => {
 for (const type of ['dragenter', 'dragover'] as const) {
   ui.dropzone.addEventListener(type, (event) => {
     event.preventDefault();
+    prefetchModel();
     ui.dropzone.classList.add('dropzone--over');
   });
 }
