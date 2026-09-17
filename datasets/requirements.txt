@@ -1,0 +1,11 @@
+# Corpus build only: pandas/sklearn for the manifest and grouped splits,
+# opencv for YuNet detection and cropping, matplotlib for the distribution plot.
+# Pinned to match ml/requirements.txt so the two can share an environment.
+# Torch is deliberately absent -- nothing here trains or runs a model.
+matplotlib==3.11.2
+numpy==2.5.3
+opencv-python==5.0.0.93
+pandas==3.0.5
+pillow==12.3.0
+scikit-learn==1.9.1
+tqdm==4.70.1
