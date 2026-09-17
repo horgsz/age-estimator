@@ -2,9 +2,17 @@ __pycache__/
 *.pyc
 .venv/
 data/
-checkpoints/
+checkpoints/*
 *.onnx
 *.pt
+
+# The two production models are tracked deliberately. See MODEL_LICENSING.md
+# before redistributing them: they are derived from non-commercial research
+# datasets.
+!checkpoints/age_model.pt
+!checkpoints/age_model.onnx
+!checkpoints/age_model_realgt.pt
+!checkpoints/age_model_realgt.onnx
 node_modules/
 dist/
 .DS_Store
