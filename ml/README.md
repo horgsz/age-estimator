@@ -759,6 +759,23 @@ from original filenames rather than the mirror's derived columns. Re-encoding
 cannot be ruled out and median source resolution is ~200px, so some images are
 upscaled to 224. See `datasets/README.md`.
 
+**Why no check in this repo can clear that caveat.** Corruption that is
+*inconsistent* self-reports: it breaks parsing, fails the leakage assertion, or
+shows up as a source whose MAE is wildly out of line. So the only upstream error
+that survives to this point is necessarily the kind that is internally
+consistent — a systematic label offset, a uniform re-encode, a subject-ID scheme
+that does not match the official archive. Every check available here is computed
+*from* this corpus, so passing them is uninformative rather than reassuring. The
+same applies to the server's observation that its measured MAE agrees with the
+`test_mae` recorded in `meta`: that is a control for the serving path, and it
+would survive a systematic label offset untouched, because both sides are scored
+against the same labels. **A check drawn from inside the thing it checks can only
+confirm.** The audit has to be external — file-level comparison against the
+official archive — and until it is done, every real-age figure in this document
+inherits AgeDB label correctness as an assumption, including the under-18 gating
+percentage that reached user-facing copy. Nothing here asserts an error exists;
+the point is that the dependency should not have to be rediscovered if one does.
+
 ### The label-smoothing experiment, and a mechanism confirmed
 
 Earlier this pipeline found that a **median** decode beat soft-expectation by a
