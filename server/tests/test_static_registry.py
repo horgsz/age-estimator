@@ -24,13 +24,14 @@ different route.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
 import pytest
 
 from server import config
-from server.tools.export_static_registry import build_registry_json
+from server.tools.export_static_registry import LOGIT_TOLERANCE, build_registry_json
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTRY_PATH = REPO_ROOT / "web" / "public" / "models" / "models.json"
@@ -44,19 +45,57 @@ def committed() -> dict:
     return json.loads(REGISTRY_PATH.read_text())
 
 
+def _without_measurements(payload: dict) -> dict:
+    """Strip the one field that is a measurement rather than a fact.
+
+    ``export_max_logit_diff`` is the observed difference between a checkpoint
+    and its ONNX export, and it is machine-dependent: ~6.7e-06 on Apple silicon
+    and ~1.7e-05 on an x86 CI runner, because the two run different float32
+    kernels. Comparing it for equality would make this test fail on every
+    machine that is not the one the file was generated on, which would train
+    everyone to regenerate the file to silence it -- and a check people
+    routinely silence checks nothing.
+
+    What must match exactly is everything the user sees and everything the
+    verification *concluded*: the figures, the digests, and ``export_verified``.
+    The magnitude is asserted separately, against the same bound the generator
+    uses.
+    """
+    stripped = copy.deepcopy(payload)
+    for model in stripped["models"]:
+        checkpoint = model.get("checkpoint")
+        if checkpoint is not None:
+            checkpoint.pop("export_max_logit_diff", None)
+    return stripped
+
+
 def test_committed_registry_matches_the_server(committed: dict) -> None:
-    """The committed file is byte-for-byte what the generator produces now."""
+    """The committed file is what the generator produces now."""
     onnx_files = list(CHECKPOINT_DIR.glob("*.onnx"))
     if not onnx_files:
         pytest.skip("no ONNX exports present to regenerate against")
     pytest.importorskip("onnxruntime")
 
     regenerated = build_registry_json(CHECKPOINT_DIR)
-    assert regenerated == committed, (
+    assert _without_measurements(regenerated) == _without_measurements(committed), (
         "web/public/models/models.json has drifted from server/. Regenerate it:\n"
         "  python -m server.tools.export_static_registry "
         "--out web/public/models/models.json"
     )
+
+    # The measurement itself, bounded rather than pinned. If an export ever
+    # stops matching its checkpoint this is where it shows up, on whatever
+    # machine happens to run the test.
+    for model in regenerated["models"]:
+        checkpoint = model.get("checkpoint") or {}
+        measured = checkpoint.get("export_max_logit_diff")
+        if measured is None:
+            continue
+        assert measured <= LOGIT_TOLERANCE, (
+            f"model {model['key']!r}: its ONNX export differs from the checkpoint "
+            f"its accuracy figures were measured on by {measured:.3g}, over the "
+            f"{LOGIT_TOLERANCE:g} bound"
+        )
 
 
 def test_crop_margin_matches_the_server(committed: dict) -> None:
