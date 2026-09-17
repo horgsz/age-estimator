@@ -65,6 +65,15 @@ They agree here (6.393 vs 6.34) because both are against real chronological
 ages on the same split — the 0.05 gap is cv2-vs-PIL resizing and detector
 framing.
 
+That agreement validates the **serving path**, not the **labels**. Both numbers
+are scored against the same ground truth, so a systematic label offset in the
+source corpus would move them together and the agreement would still hold. Every
+real-age figure here inherits the label correctness of AgeDB, APPA-REAL and
+FG-NET — AgeDB being most of it — and no check this server performs could see
+such an offset, because all of them are internal to this server. An external
+comparison against the official archive is the only thing that would, and that
+audit belongs to `ml/`.
+
 > **6.393 is NOT an improvement on the previous model's 5.5472.** They measure
 > different things. The old figure was agreement with UTKFace's DEX-estimated
 > *apparent* ages; this one is error against *real chronological* age. On a

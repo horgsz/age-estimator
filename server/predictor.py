@@ -103,6 +103,21 @@ DEFAULT_DECODE = "median"
 #
 # Every figure here is measured end to end through THIS server's path (YuNet
 # detect -> our crop -> model -> decode), not copied from a training report.
+#
+# What that does NOT cover: the labels. End-to-end measurement validates the
+# serving path, not the ground truth it is scored against. Every real-age
+# figure below inherits the label correctness of AgeDB, APPA-REAL and FG-NET,
+# and AgeDB is the large majority of the corpus. A systematic label offset in
+# the mirror we used would move all of these uniformly -- including the
+# under-18 gating percentage that is user-facing copy -- while breaking
+# nothing, because every check this server performs is internal to itself
+# (digest, contract, crop-margin agreement) and internal checks cannot detect
+# a self-consistent upstream error.
+#
+# AgeDB provenance is under external audit by the ml/ side against the
+# official archive at time of writing. This note exists so that if that audit
+# finds an offset, the dependency is already written down next to the numbers
+# it would invalidate, rather than being rediscovered.
 MEASURED_ACCURACY_BY_DIGEST = {
     # Real chronological ground truth: AgeDB + APPA-REAL + FG-NET, no UTKFace
     # and no DEX-derived labels anywhere in training or evaluation.
