@@ -1,0 +1,58 @@
+{
+  "cases": [
+    {
+      "id": "full",
+      "image": "full.png",
+      "model": "real"
+    },
+    {
+      "id": "large",
+      "image": "large.png",
+      "model": "real"
+    },
+    {
+      "id": "small",
+      "image": "small.png",
+      "model": "real"
+    },
+    {
+      "id": "edge",
+      "image": "edge.png",
+      "model": "real"
+    },
+    {
+      "id": "clipped",
+      "image": "clipped.png",
+      "model": "real"
+    },
+    {
+      "id": "two-faces",
+      "image": "two-faces.png",
+      "model": "real"
+    },
+    {
+      "id": "full-apparent",
+      "image": "full.png",
+      "model": "apparent"
+    },
+    {
+      "id": "strict-no-resize",
+      "image": "full.png",
+      "model": "real",
+      "boxes": [
+        [
+          80,
+          90,
+          224,
+          224
+        ]
+      ]
+    },
+    {
+      "id": "margin-0.25",
+      "image": "full.png",
+      "model": "real",
+      "crop_margin": 0.25
+    }
+  ]
+}

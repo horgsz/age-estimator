@@ -1,0 +1,13 @@
+{
+  "name": "age-estimator-parity",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Headless-browser half of the Python/browser parity harness.",
+  "scripts": {
+    "install-browser": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
+  }
+}

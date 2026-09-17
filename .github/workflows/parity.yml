@@ -1,0 +1,78 @@
+# The check that stops the browser port drifting away from the server.
+#
+# Two implementations of the same preprocessing exist in this repository, and a
+# silent mismatch between them degrades every prediction while leaving every
+# other test green -- which has happened here once already, with a crop margin
+# that shipped a 2.4x accuracy loss past a healthy-looking evaluation.
+#
+# This job is the thing that would have caught it. It runs the same images
+# through both paths and requires the 224x224 tensors to be identical, so it is
+# worth the ~2 minutes of installing torch.
+
+name: Parity
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CPU wheels only: the GPU builds are ~2 GB and nothing here uses one.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -r server/requirements.txt
+
+      - name: Run the server test suite
+        run: python -m pytest
+
+      - name: Build the static site
+        working-directory: web
+        run: |
+          npm ci
+          npm run build:static
+
+      - name: Reference run (Python)
+        run: |
+          python parity/run_python.py \
+            --cases parity/fixtures/cases.json --out parity/python.json
+
+      - name: Browser run (headless Chromium)
+        run: |
+          cd parity && npm ci && npx playwright install --with-deps chromium && cd ..
+          node parity/run_browser.mjs --dist web/dist --base / \
+            --cases parity/fixtures/cases.json --out parity/browser.json
+
+      - name: Compare
+        run: |
+          python parity/compare.py \
+            --python parity/python.json --browser parity/browser.json --strict
+
+      - name: Upload the raw runs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-runs
+          path: |
+            parity/python.json
+            parity/browser.json
+          retention-days: 7

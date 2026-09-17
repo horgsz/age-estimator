@@ -1,0 +1,6 @@
+# Harness output. Several megabytes each, because they carry the full float32
+# tensors base64-encoded -- that is what makes an element-wise comparison
+# possible, and it is also what makes them unsuitable for version control.
+# The measured numbers live in RESULTS.md.
+python.json
+browser.json
