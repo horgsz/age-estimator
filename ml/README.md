@@ -917,6 +917,38 @@ file remains valid. The earlier version of this was republishing
 `age_model.pt` under a live consumer; this was the same mistake pointed at
 myself. Publish paths and experiment paths must be disjoint.
 
+### A checkpoint that advertised a score it had never earned
+
+`train.py` stamps the best *validation* MAE into `meta["test_mae"]`, on the
+assumption that `eval.py` overwrites it with a real held-out measurement
+afterwards. For the shipped artifact it did. For the three real-GT variants it
+never ran, so all three sat on disk advertising a **val** number in a field
+named `test_mae`. The caveat existed, but only as a comment in `train.py` —
+invisible to anyone reading the file.
+
+Every one of them flattered itself, because val was the selection set:
+
+| variant | advertised (val) | measured (test) | error |
+|---|---:|---:|---:|
+| realgt CE | 6.911 | 6.850 | −0.06 |
+| realgt ls=0.0 | 6.464 | 6.767 | **+0.30** |
+| realgt DLDL | 6.263 | 6.393 | +0.13 |
+
+This is the same failure the artifact-manifest work was meant to stop, one level
+further in: **a file inheriting an accuracy figure it did not earn.** The fix is
+the same principle — provenance must travel *with* the artifact, not alongside it
+in source. `train.py` now writes `test_mae_source` and `val_mae` into `meta`, so
+a provisional number announces itself.
+
+The three variants have been re-stamped with their measured test figures, plus a
+`decode` key and a `role` field marking them as experiment intermediates rather
+than published artifacts. `ls0` was the one that mattered: it is the **only**
+checkpoint here where expectation beats median (6.767 vs 6.889), so a consumer
+defaulting to median would have silently measured the worse decode and concluded
+that removing label smoothing underperforms — inverting this section's central
+result. Caught by the server session, which asked why only one of four
+checkpoints carried the `decode` key.
+
 ### What this does not show
 
 - **Not a better product model, necessarily.** If the goal is to predict how old

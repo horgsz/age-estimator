@@ -305,9 +305,25 @@ def train(args: argparse.Namespace) -> float:
 
         if improved:
             best_mae = val_mae
-            # test_mae is provisionally the best val MAE; ml/eval.py rewrites it
-            # with the real held-out test MAE once training finishes.
-            save_checkpoint(model, best_mae, args.checkpoint)
+            # test_mae provisionally holds the best *val* MAE. That caveat used
+            # to live only in this comment, where no consumer of the file could
+            # see it -- a checkpoint straight from training advertised a test
+            # figure it had never earned. Stamp the provenance into meta so it
+            # travels with the artifact instead of with the source.
+            save_checkpoint(
+                model,
+                best_mae,
+                args.checkpoint,
+                decode="expectation",
+                extra={
+                    "val_mae": float(best_mae),
+                    "test_mae_source": (
+                        "PROVISIONAL: this is the best validation MAE, not a "
+                        "held-out test measurement. Run eval.py (utkface) or "
+                        "realgt_compare.py (realgt) to replace it."
+                    ),
+                },
+            )
             print(f"  saved checkpoint -> {args.checkpoint}")
 
     # Derived from the checkpoint name so parallel variants cannot silently
