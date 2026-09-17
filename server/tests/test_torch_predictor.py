@@ -27,8 +27,8 @@ timm = pytest.importorskip("timm")
 BACKBONE = "mobilenetv3_small_100"
 
 
-def _write_checkpoint(directory, *, decode=None, name="age_model.pt"):
-    """Save a contract-shaped checkpoint, optionally declaring a decode."""
+def _write_checkpoint(directory, *, decode=None, name="age_model.pt", **extra_meta):
+    """Save a contract-shaped checkpoint, optionally declaring extra metadata."""
     directory.mkdir(parents=True, exist_ok=True)
     model = timm.create_model(BACKBONE, pretrained=False, num_classes=config.NUM_BINS)
     meta = {
@@ -41,6 +41,7 @@ def _write_checkpoint(directory, *, decode=None, name="age_model.pt"):
     }
     if decode is not None:
         meta["decode"] = decode
+    meta.update(extra_meta)
     path = directory / name
     torch.save({"state_dict": model.state_dict(), "meta": meta}, path)
     return path
@@ -311,3 +312,125 @@ def test_expectation_decode_changes_the_reported_age(tmp_path):
 
     assert median_p._estimate(batch).age[0] == pytest.approx(8.0)
     assert expect_p._estimate(batch).age[0] == pytest.approx(12.2, abs=0.3)
+
+
+def test_crop_margin_mismatch_with_training_is_flagged_loudly(tmp_path, caplog, monkeypatch):
+    """A serving crop that differs from the training crop must not be silent.
+
+    The crop is the largest preprocessing lever we have, and a mismatch has no
+    symptom: faces are simply framed differently from training and every
+    prediction degrades. Checkpoints now record `crop_margin`, so this is
+    checkable rather than a comment asking a future maintainer to remember.
+    """
+    monkeypatch.setattr(config, "CROP_MARGIN", 0.4)
+    path = _write_checkpoint(tmp_path / "m", crop_margin=0.0)
+
+    with caplog.at_level(logging.WARNING):
+        predictor = TorchPredictor(str(path), detector=FakeDetector([]))
+
+    info = predictor.describe_checkpoint()
+    assert info["trained_crop_margin"] == pytest.approx(0.0)
+    assert info["serving_crop_margin"] == pytest.approx(0.4)
+    assert info["crop_margin_matches_training"] is False
+
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "CROP MARGIN MISMATCH" in messages
+    # The warning has to name the value to set, or it just tells someone that
+    # something is wrong without saying what to do about it.
+    assert "0.0" in messages
+
+
+def test_matching_crop_margin_is_not_warned_about(tmp_path, caplog, monkeypatch):
+    """The check must stay quiet when things are correct, or it gets ignored."""
+    monkeypatch.setattr(config, "CROP_MARGIN", 0.0)
+    path = _write_checkpoint(tmp_path / "m", crop_margin=0.0)
+
+    with caplog.at_level(logging.WARNING):
+        predictor = TorchPredictor(str(path), detector=FakeDetector([]))
+
+    assert predictor.describe_checkpoint()["crop_margin_matches_training"] is True
+    assert "CROP MARGIN MISMATCH" not in " ".join(r.getMessage() for r in caplog.records)
+
+
+def test_crop_margin_is_not_silently_overridden_by_the_checkpoint(tmp_path, monkeypatch):
+    """We warn on drift, we do not override.
+
+    CROP_MARGIN is deliberately tunable at runtime for A/B sweeps, so silently
+    replacing an operator's explicit setting with the checkpoint's would break
+    the margin harness and ignore a deliberate instruction.
+    """
+    monkeypatch.setattr(config, "CROP_MARGIN", 0.4)
+    path = _write_checkpoint(tmp_path / "m", crop_margin=0.0)
+    TorchPredictor(str(path), detector=FakeDetector([]))
+
+    assert config.CROP_MARGIN == pytest.approx(0.4)
+
+
+def test_undeclared_crop_margin_reports_unknown_not_a_false_match(tmp_path, monkeypatch):
+    """The shipped artifact predates `crop_margin`; absence is not agreement."""
+    monkeypatch.setattr(config, "CROP_MARGIN", 0.0)
+    predictor = TorchPredictor(
+        str(_write_checkpoint(tmp_path / "m")), detector=FakeDetector([])
+    )
+    info = predictor.describe_checkpoint()
+
+    assert info["trained_crop_margin"] is None
+    # Must be None, not True. Reporting a match we never verified would be a
+    # false assurance, which is worse than admitting we cannot tell.
+    assert info["crop_margin_matches_training"] is None
+
+
+def test_malformed_crop_margin_does_not_break_startup(tmp_path, monkeypatch):
+    """Metadata is written by another codebase; junk must degrade, not crash."""
+    monkeypatch.setattr(config, "CROP_MARGIN", 0.0)
+    predictor = TorchPredictor(
+        str(_write_checkpoint(tmp_path / "m", crop_margin="not-a-number")),
+        detector=FakeDetector([]),
+    )
+    assert predictor.describe_checkpoint()["trained_crop_margin"] is None
+
+
+def test_experiment_intermediate_role_is_surfaced(tmp_path):
+    """An artifact built to prove a point must not pass as the published model.
+
+    Three of the real-GT checkpoints are label-smoothing study intermediates.
+    A pasted /health payload should make that obvious.
+    """
+    path = _write_checkpoint(
+        tmp_path / "r", role="EXPERIMENT INTERMEDIATE from the label-smoothing study"
+    )
+    info = TorchPredictor(str(path), detector=FakeDetector([])).describe_checkpoint()
+    assert "EXPERIMENT INTERMEDIATE" in info["role"]
+
+
+def test_provisional_val_derived_mae_announces_itself(tmp_path):
+    """train.py stamps best *val* MAE into test_mae until eval.py overwrites it.
+
+    Until then the field is a selection-set score flattering itself by up to
+    ~0.3 years, under a name that reads as a held-out result. Surfacing the
+    source is what lets a consumer tell the two apart.
+    """
+    path = _write_checkpoint(
+        tmp_path / "p", test_mae=6.464, test_mae_source="val", val_mae=6.464
+    )
+    info = TorchPredictor(str(path), detector=FakeDetector([])).describe_checkpoint()
+
+    assert info["recorded_test_mae_source"] == "val"
+    assert info["recorded_val_mae"] == pytest.approx(6.464)
+
+
+def test_corpus_and_label_semantics_travel_with_the_number(tmp_path):
+    """An MAE is meaningless without knowing what it is an error against.
+
+    5.5472 against DEX-estimated apparent age and 6.393 against real
+    chronological age are not comparable, and the smaller is the weaker result.
+    """
+    path = _write_checkpoint(
+        tmp_path / "c",
+        corpus="real_ground_truth (AgeDB + APPA-REAL + FG-NET)",
+        label_semantics="real chronological age",
+    )
+    info = TorchPredictor(str(path), detector=FakeDetector([])).describe_checkpoint()
+
+    assert "AgeDB" in info["recorded_test_mae_corpus"]
+    assert info["label_semantics"] == "real chronological age"

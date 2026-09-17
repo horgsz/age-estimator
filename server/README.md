@@ -96,6 +96,40 @@ exactly 50) drags an expectation decode toward the middle, so median wins by
 by ~0.12. Hardcoding either one silently leaves accuracy on the table the next
 time training changes — hence the key, and hence that we honour it.
 
+### The serving crop is checked against the training crop
+
+Checkpoints record the `crop_margin` they were trained with. On load we compare
+it to the margin this server is serving and log a loud `CROP MARGIN MISMATCH`
+warning if they differ, naming the value to set. `/health` reports
+`trained_crop_margin`, `serving_crop_margin` and `crop_margin_matches_training`.
+
+The crop is the largest preprocessing lever we have and a mismatch is **silent**
+— no error, no visible symptom, just every face framed differently from training
+and accuracy quietly degraded. This used to rest on a comment asking whoever
+came next to keep the two in sync; now it is checked.
+
+We **warn rather than override**. `CROP_MARGIN` is deliberately tunable at
+runtime for A/B sweeps, so silently replacing an operator's explicit setting
+with the checkpoint's would break the margin harness and ignore a deliberate
+instruction. An undeclared margin reports `null`, not `true` — absence of a
+declaration is not evidence of agreement, and claiming a match we never verified
+would be a false assurance.
+
+### Provenance travels with the number
+
+`/health` passes several metadata fields straight through:
+
+| field | why it is there |
+| --- | --- |
+| `recorded_test_mae_corpus` | An MAE is meaningless without knowing what it is an error *against*. 5.5472 against DEX-estimated apparent age and 6.393 against real chronological age are not comparable, **and the smaller one is the weaker result**. |
+| `label_semantics` | Distinguishes real chronological age from DEX-estimated apparent age. |
+| `recorded_test_mae_source` / `recorded_val_mae` | Training stamps the best *validation* MAE into `test_mae` and relies on a later eval pass to overwrite it. Until that happens the field is a selection-set score flattering itself — by up to ~0.3 years — under a name that reads as a held-out result. These fields let a provisional number announce itself. |
+| `role` | Marks experiment intermediates, so an artifact that exists to demonstrate a point is never mistaken for the published model in a pasted `/health` payload. |
+
+The general rule, learned the hard way on both sides of this project: a caveat
+that lives in the producing code, or in a README, is invisible at the point of
+use. It has to be carried by the artifact and surfaced by the consumer.
+
 This exists because the checkpoint was twice republished to the same path
 mid-evaluation, silently invalidating measurements taken against it. `test_mae`
 alone is not sufficient to tell two artifacts apart — the second republish kept

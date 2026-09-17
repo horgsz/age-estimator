@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -253,6 +254,22 @@ class StubPredictor(AgePredictor):
 _WRAPPER_PREFIXES = ("backbone.", "model.", "module.", "net.")
 
 
+def _as_float(value) -> float | None:
+    """Coerce a metadata value to float, tolerating absence and junk.
+
+    Checkpoint metadata is written by another codebase, so a field may be
+    missing, ``None``, or a string. A malformed value must not take the server
+    down at startup -- it degrades to "not declared", which the caller already
+    handles.
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _strip_wrapper_prefix(state_dict: dict, model) -> dict:
     """Unwrap a state dict saved from a module that *contains* the timm model.
 
@@ -371,6 +388,29 @@ class TorchPredictor(AgePredictor):
                 ", ".join(SUPPORTED_DECODES),
             )
 
+        # Check the serving crop against the one the checkpoint was TRAINED
+        # with. The crop is the single largest preprocessing lever we have, and
+        # a mismatch is silent: every face is simply framed differently from
+        # training, degrading accuracy with no error and no visible symptom.
+        # Checkpoints now record `crop_margin`, so this is checkable rather than
+        # a comment asking someone to remember. We warn instead of overriding --
+        # CROP_MARGIN is deliberately tunable at runtime for A/B work, and
+        # silently ignoring an operator's explicit setting would be its own bug.
+        self.trained_crop_margin = _as_float(self.meta.get("crop_margin"))
+        if self.trained_crop_margin is not None and not math.isclose(
+            self.trained_crop_margin, config.CROP_MARGIN, abs_tol=1e-6
+        ):
+            log.warning(
+                "CROP MARGIN MISMATCH: checkpoint was trained with crop_margin=%s "
+                "but this server is serving crop_margin=%s. Every crop will be "
+                "framed differently from training, which degrades accuracy "
+                "silently. Set CROP_MARGIN=%s unless you are deliberately "
+                "sweeping it.",
+                self.trained_crop_margin,
+                config.CROP_MARGIN,
+                self.trained_crop_margin,
+            )
+
         log.info(
             "Loaded age model %s (%d bins, input %d) from %s; "
             "sha256:%s, decode: %s, recorded test MAE: %s",
@@ -396,6 +436,31 @@ class TorchPredictor(AgePredictor):
             "recorded_test_mae": round(float(test_mae), 4) if test_mae is not None else None,
             "recorded_test_mae_decode": str(self.meta.get("decode", "expectation")),
             "serving_decode": self.decode,
+            # What the recorded figure is an error *against*. A number is
+            # meaningless without this: 5.5472 against DEX-estimated apparent
+            # age and 6.393 against real chronological age are not comparable,
+            # and the smaller one is the weaker result. Passed through verbatim
+            # so the artifact's own provenance travels with its number instead
+            # of being re-narrated here, where it would go stale.
+            "recorded_test_mae_corpus": self.meta.get("corpus"),
+            "label_semantics": self.meta.get("label_semantics"),
+            # Present only while a figure is provisional. train.py stamps the
+            # best *validation* MAE into test_mae and relies on eval.py to
+            # overwrite it; until that happens the field is a selection-set
+            # score flattering itself. These keys let that announce itself.
+            "recorded_test_mae_source": self.meta.get("test_mae_source"),
+            "recorded_val_mae": _as_float(self.meta.get("val_mae")),
+            # Experiment intermediates carry a role. Surfaced so an artifact
+            # that exists to demonstrate a point is never mistaken for the
+            # published model in a pasted /health payload.
+            "role": self.meta.get("role"),
+            "trained_crop_margin": self.trained_crop_margin,
+            "serving_crop_margin": config.CROP_MARGIN,
+            "crop_margin_matches_training": (
+                None
+                if self.trained_crop_margin is None
+                else math.isclose(self.trained_crop_margin, config.CROP_MARGIN, abs_tol=1e-6)
+            ),
         }
 
         # Our own measured accuracy figures are pinned to the exact artifact
