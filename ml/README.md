@@ -991,6 +991,28 @@ correct. That gap is pure base rate, and it is the strongest argument in this
 repo against using these predictions for anything gate-like. `predicted_age_bands.py`
 computes both directions precisely so neither can be quoted alone.
 
+### What this retrain cost us, measurably
+
+Training on APPA-REAL's train split **consumed part of the only instrument that
+could explain the residual.** APPA-REAL is the one corpus here carrying both
+`real_age` and `apparent_age_avg`, which is what makes it able to separate "the
+model is wrong" from "the face looks that age". The model has now seen 5,613 of
+those rows, so any future apparent-vs-real decomposition is restricted to the
+1,978-row test split rather than the full 7,591.
+
+That was the right trade — the corpus was needed and held-out evaluation is
+preserved — but it was not free, and it is worth recording as a cost rather than
+discovering later as a limitation. The instrument got smaller as a direct result
+of the experiment that made us want to use it.
+
+This matters because the attractive next move is to assume the unexplained
+residual (slope stuck at 0.808, 80+ bias stuck at −8.69) is irreducible
+perceptual difficulty. **Nothing here shows that.** Two independent measures
+agree that roughly a third of the compression was learned from labels and the
+rest was not; neither identifies what the rest is. AgeDB and FG-NET carry real
+ages only, so they cannot answer it. FG-NET additionally has **zero images above
+age 69**, so it is silent on precisely the band in question.
+
 ### What this does not show
 
 - **Not a better product model, necessarily.** If the goal is to predict how old
