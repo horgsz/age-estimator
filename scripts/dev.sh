@@ -56,7 +56,7 @@ api_pid=$!
 GROUPS_TO_KILL="$GROUPS_TO_KILL $api_pid"
 
 echo "==> web  http://$WEB_HOST:$WEB_PORT"
-(cd web && npm run dev -- --host "$WEB_HOST" --port "$WEB_PORT") 2>&1 | prefix "[web]" &
+(cd web && VITE_API_BASE="${VITE_API_BASE:-http://$API_HOST:$API_PORT}" npm run dev -- --host "$WEB_HOST" --port "$WEB_PORT") 2>&1 | prefix "[web]" &
 web_pid=$!
 GROUPS_TO_KILL="$GROUPS_TO_KILL $web_pid"
 
