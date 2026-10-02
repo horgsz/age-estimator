@@ -51,9 +51,9 @@ VAL_BANDS = [("<14", 0, 13), ("14-19", 14, 19), ("20-29", 20, 29), ("30-39", 30,
 
 def age_importance(age: int) -> float:
     if age < 10:
-        return 0.25
+        return 0.4
     if age < FOCUS_BAND[0]:
-        return 0.5
+        return 0.8
     if age <= FOCUS_BAND[1]:
         return 1.0
     if age < 80:
@@ -274,7 +274,11 @@ def train(args: argparse.Namespace) -> float:
         model = model.to(device)
         print(f"Fine-tuning from {args.init_from}")
     else:
-        model = AgeEstimator(num_bins=NUM_BINS, pretrained=not args.no_pretrained).to(device)
+        model = AgeEstimator(
+            backbone=args.backbone, num_bins=NUM_BINS, pretrained=not args.no_pretrained,
+        ).to(device)
+    print(f"Backbone: {model.backbone_name} "
+          f"({sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params)")
     criterion = build_criterion(args).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
 
@@ -462,6 +466,10 @@ def main() -> None:
     parser.add_argument(
         "--sources", nargs="*", default=None,
         help="realgt corpus: restrict to these sources (default: all real-GT sources)",
+    )
+    parser.add_argument(
+        "--backbone", default="mobilenetv3_small_100",
+        help="timm backbone when not using --init-from (see model.PRETRAINED_TAGS)",
     )
     parser.add_argument(
         "--init-from", type=Path, default=None,
