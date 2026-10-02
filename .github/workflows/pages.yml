@@ -82,6 +82,11 @@ jobs:
           # Project site, not a user site. Without this the deployed page loads
           # and then fails to find any of its own assets.
           VITE_BASE: /age-estimator/
+          # Optional hosted API (scripts/deploy_hf_space.sh sets this repository
+          # variable). When set, the site defaults to the larger server-side
+          # model; ?engine=browser still runs everything client-side.
+          VITE_API_BASE: ${{ vars.AGE_API_BASE }}
+          VITE_ENGINE: ${{ vars.AGE_API_BASE && 'server' || 'browser' }}
         run: npm run build:static
 
       - name: Check the build has its models

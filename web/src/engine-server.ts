@@ -16,7 +16,10 @@ const JPEG_QUALITY = 0.9;
 
 export class ServerEngine implements Engine {
   readonly kind = 'server' as const;
-  readonly privacyNote = '';
+  // A remote API means the photo leaves the device; say so. Local is silent.
+  readonly privacyNote = /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(API_BASE)
+    ? ''
+    : `Your photo is sent to ${new URL(API_BASE).host} to be analysed.`;
 
   async describe(): Promise<ModelsInfo> {
     const health = await fetchHealth();

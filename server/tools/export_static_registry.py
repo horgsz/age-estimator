@@ -240,7 +240,11 @@ def build_registry_json(model_dir: Path, *, verify: bool = True) -> dict:
             "top_k": config.DETECT_TOP_K,
             "max_detect_side": 1024,
         },
-        "catalog": [asdict(spec) for spec in config.MODEL_CATALOG],
+        # server_only_digests describe this machine, not the static build.
+        "catalog": [
+            {k: v for k, v in asdict(spec).items() if k != "server_only_digests"}
+            for spec in config.MODEL_CATALOG
+        ],
     }
 
 

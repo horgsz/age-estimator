@@ -2,7 +2,7 @@ import type { EstimateResponse, HealthResponse } from './types';
 
 /** Base URL of the FastAPI server. Override with `VITE_API_BASE`. */
 export const API_BASE: string = (
-  import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8000'
+  import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
 ).replace(/\/$/, '');
 
 const REQUEST_TIMEOUT_MS = 30_000;

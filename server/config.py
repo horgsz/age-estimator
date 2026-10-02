@@ -61,6 +61,11 @@ class ModelSpec:
     label: str
     question: str
     explanation: str
+    #: Digests also accepted in this slot that are too large for git or the
+    #: browser build and so exist only on the machine that trained them
+    #: (served with AGE_MODEL_PATH_<KEY>). Each must have measured figures in
+    #: predictor.MEASURED_ACCURACY_BY_DIGEST.
+    server_only_digests: tuple[str, ...] = ()
 
 
 MODEL_CATALOG: tuple[ModelSpec, ...] = (
