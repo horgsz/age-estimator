@@ -52,13 +52,13 @@ and the MAE the trainer claimed:
 ```json
 {
   "status": "ok",
-  "model": "mobilenetv3_small_100",
+  "model": "mobilenetv4_conv_medium",
   "stub": false,
   "checkpoint": {
     "path": "/abs/path/checkpoints/age_model_realgt.pt",
-    "sha256": "78a8e04de16a",
-    "bytes": 6618529,
-    "recorded_test_mae": 6.174,
+    "sha256": "fe69f4e55571",
+    "bytes": 34696997,
+    "recorded_test_mae": 5.875,
     "recorded_test_mae_decode": "median",
     "serving_decode": "median",
     "recorded_test_mae_corpus": "real_ground_truth (AgeDB 16487 + APPA-REAL 7591 + FG-NET 1002)",
@@ -112,7 +112,8 @@ loaded checkpoint's `sha256`. Two artifacts are in it:
 
 | sha256 | model | real-age MAE | in-corpus UTKFace MAE |
 | --- | --- | ---: | ---: |
-| `78a8e04de16a` | real-GT + IMDB-Clean, 14-60 focus (served) | **6.17** | `null` — never saw UTKFace |
+| `fe69f4e55571` | MobileNetV4-Medium, real-GT + IMDB-Clean, 14-60 focus (served) | **5.88** | `null` — never saw UTKFace |
+| `78a8e04de16a` | real-GT + IMDB-Clean, 14-60 focus (previous) | 6.17 | `null` — never saw UTKFace |
 | `fb629f49987a` | real-GT (previous) | 6.34 | `null` — never saw UTKFace |
 | `56894c480044` | UTKFace/DEX (retired, refused) | 9.11 | 4.762 |
 

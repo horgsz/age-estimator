@@ -53,7 +53,7 @@ good at that (regression slope 0.935 against crowd-judged apparent age, versus
 
 | | |
 |---|---|
-| sha256 (first 12) | `78a8e04de16a` (fine-tuned from `fb629f49987a`) |
+| sha256 (first 12) | `fe69f4e55571` (MobileNetV4-Medium, 34.7 MB; predecessors `78a8e04de16a`, `fb629f49987a`) |
 | Corpus | ~300,000 images with real chronological ages, sampled toward ages 14-60 |
 
 | Source | Images | Licence | Provenance |
@@ -94,10 +94,11 @@ corpus. No subject appears in both training and test data.
 |---|---|---|---|
 | `age_model.pt` (apparent) | 9.13 | 42.2% | 0.744 |
 | `age_model_realgt.pt` (real, `fb629f49987a`) | 6.39 | 56.2% | 0.808 |
-| `age_model_realgt.pt` (real, `78a8e04de16a`, current) | 6.17 | — | — |
+| `age_model_realgt.pt` (real, `78a8e04de16a`) | 6.17 | — | — |
+| `age_model_realgt.pt` (real, `fe69f4e55571`, current) | 5.88 | — | — |
 
-On ages 14-60 the current model is 5.66 against its predecessor's 6.14, but
-40% of under-18s display as 18 or over (predecessor: 30%).
+On ages 14-60 the current model is 5.42 (`78a8e04de16a`: 5.66, `fb629f49987a`:
+6.14). 31% of under-18s display as 18 or over (`78a8e04de16a`: 40%).
 
 Both numbers are error against *real chronological age*. That is not the target
 `age_model.pt` optimises, so it is the honest number for that model rather than
