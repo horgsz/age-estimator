@@ -68,13 +68,13 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         key="real",
         filename="age_model_realgt.pt",
         env_var="AGE_MODEL_PATH_REAL",
-        expected_digest="fb629f49987a",
+        expected_digest="78a8e04de16a",
         label="Real age",
         question="How old this person actually is",
         explanation=(
-            "Trained on 25,080 photos with real chronological ages (AgeDB, "
-            "APPA-REAL, FG-NET). Typical error about 6.4 years against a "
-            "person's actual age."
+            "Trained on about 300,000 photos with real chronological ages "
+            "(AgeDB, APPA-REAL, FG-NET, IMDB-Clean), tuned for ages 14 to 60. "
+            "Typical error about 6.2 years against a person's actual age."
         ),
     ),
 )

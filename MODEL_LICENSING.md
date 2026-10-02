@@ -20,6 +20,8 @@ plausibly falls within, but "plausibly" is doing real work in that sentence:
   the weights inherit have not been confirmed against the official
   distribution.
 * UTKFace is non-commercial research only.
+* IMDB-Clean is ~90% of the current real-age corpus. Its labels are MIT, but
+  the images are IMDB-WIKI's, released for academic research purposes only.
 * A derived model is generally treated as carrying its training data's
   restrictions; that is an assumption, not a licence grant anyone has given.
 
@@ -51,14 +53,17 @@ good at that (regression slope 0.935 against crowd-judged apparent age, versus
 
 | | |
 |---|---|
-| sha256 (first 12) | `fb629f49987a` |
-| Corpus | 25,080 images with real chronological ages |
+| sha256 (first 12) | `78a8e04de16a` (fine-tuned from `fb629f49987a`) |
+| Corpus | ~300,000 images with real chronological ages, sampled toward ages 14-60 |
 
 | Source | Images | Licence | Provenance |
 |---|---|---|---|
 | AgeDB | 16,487 | Non-commercial research only | Ages transcribed by hand from captions |
 | APPA-REAL | 7,591 | Research use | Real ages from image-owner metadata |
 | FG-NET | 1,002 | Free to use | Dated personal photographs |
+| IMDB-Clean | ~286,000 | Labels MIT; images IMDB-WIKI, academic research only | IMDb birth date vs photo year, cleaned by constrained clustering |
+
+`fb629f49987a`, its predecessor, was trained on the first three sources only.
 
 **AgeDB caveat.** AgeDB is 66% of this corpus, and it was obtained from a
 third-party HuggingFace mirror (`marcelohaps/agedb`), not from the official
@@ -88,7 +93,11 @@ corpus. No subject appears in both training and test data.
 | model | MAE vs real age | CS@5 | slope |
 |---|---|---|---|
 | `age_model.pt` (apparent) | 9.13 | 42.2% | 0.744 |
-| `age_model_realgt.pt` (real) | 6.39 | 56.2% | 0.808 |
+| `age_model_realgt.pt` (real, `fb629f49987a`) | 6.39 | 56.2% | 0.808 |
+| `age_model_realgt.pt` (real, `78a8e04de16a`, current) | 6.17 | — | — |
+
+On ages 14-60 the current model is 5.66 against its predecessor's 6.14, but
+40% of under-18s display as 18 or over (predecessor: 30%).
 
 Both numbers are error against *real chronological age*. That is not the target
 `age_model.pt` optimises, so it is the honest number for that model rather than

@@ -77,14 +77,13 @@ LOW_Q, HIGH_Q = 0.16, 0.84
 # measured on would be fitting the evaluation set.
 INTERVAL_CALIBRATION = {
     "nominal": 0.68,
-    "measured": {"real": 0.608, "apparent": 0.617},
-    "corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3807",
+    "measured": {"real": 0.712},
+    "corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3818",
     "scope": "corpus",
     "note": (
-        "The low/high interval is nominally 68% (the 0.16/0.84 quantiles) but "
-        "covers about 61% on this corpus. The shortfall is a property of the "
-        "construction and corpus, not of either checkpoint -- the two models "
-        "differ by 0.9pp. Not retuned, because tuning it to the split it is "
+        "The low/high interval is nominally 68% (the 0.16/0.84 quantiles) and "
+        "covers about 71% on this corpus. The previous model covered 61% on "
+        "the same split. Not retuned, because tuning it to the split it is "
         "measured on would be fitting the evaluation set."
     ),
 }
@@ -119,6 +118,33 @@ DEFAULT_DECODE = "median"
 # finds an offset, the dependency is already written down next to the numbers
 # it would invalidate, rather than being rediscovered.
 MEASURED_ACCURACY_BY_DIGEST = {
+    # The served model since the 14-60 retrain: fb629f49987a fine-tuned on
+    # AgeDB + APPA-REAL + FG-NET + IMDB-Clean with --age-focus. Measured on the
+    # same 3,818-image clean-label test split as fb629f49987a (whose ml-side
+    # figure there is 6.393), through the ml crop path with median decode.
+    "78a8e04de16a": {
+        "real_age_mae": 6.17,
+        "real_age_corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3818",
+        # Ages 14-60, the band it was tuned for: 5.66 (fb629f49987a: 6.14).
+        "real_age_mae_14_60": 5.66,
+        # Including IMDB-Clean's noisier labels, n=15400: 7.07 (fb629f49987a: 8.43).
+        "real_age_mae_with_imdb": 7.07,
+        "in_corpus_mae_utkface": None,
+        "accuracy_note": (
+            "real_age_mae is the error against real chronological age on the "
+            "clean-label held-out split, measured through the ml crop path "
+            "(the same YuNet crop at margin 0.0) rather than end to end "
+            "through this server. This model never saw UTKFace."
+        ),
+        "user_facing": {
+            "typical_error_years": 6.2,
+            "typical_error_basis": "against a person's real age",
+            # Worse than fb629f49987a's 30.2% on the same split: the 14-60
+            # focus and IMDB's adult-skewed teens push young faces older.
+            "gating_under18_shown_adult_pct": 39.9,
+            "caveat": None,
+        },
+    },
     # Real chronological ground truth: AgeDB + APPA-REAL + FG-NET, no UTKFace
     # and no DEX-derived labels anywhere in training or evaluation.
     "fb629f49987a": {
