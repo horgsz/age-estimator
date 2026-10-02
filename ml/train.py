@@ -43,6 +43,10 @@ def pick_device(requested: str) -> torch.device:
 # the elderly less, young children least. --age-focus samples by this
 # importance and selects checkpoints on MAE inside FOCUS_BAND.
 FOCUS_BAND = (14, 60)
+# Validation is also reported per band, so a pooled gain cannot hide a
+# regression in the ages that matter. Bounds are inclusive.
+VAL_BANDS = [("<14", 0, 13), ("14-19", 14, 19), ("20-29", 20, 29), ("30-39", 30, 39),
+             ("40-49", 40, 49), ("50-60", 50, 60), ("61-79", 61, 79), ("80+", 80, 200)]
 
 
 def age_importance(age: int) -> float:
@@ -220,14 +224,15 @@ def mixup_batch(
 @torch.no_grad()
 def evaluate(
     model: AgeEstimator, loader: DataLoader, device: torch.device
-) -> tuple[float, float, float]:
-    """Return (MAE, CS@5, MAE inside FOCUS_BAND)."""
+) -> tuple[float, float, float, dict[str, tuple[float, int]]]:
+    """Return (MAE, CS@5, MAE inside FOCUS_BAND, {band: (MAE, n)})."""
     model.eval()
     abs_err_sum = 0.0
     within5 = 0
     n = 0
     focus_err_sum = 0.0
     focus_n = 0
+    band_err = {name: [0.0, 0] for name, _, _ in VAL_BANDS}
     for images, ages in loader:
         images = images.to(device, non_blocking=True)
         pred, _ = model.expectation(model(images))
@@ -239,8 +244,14 @@ def evaluate(
         in_band = (ages >= FOCUS_BAND[0]) & (ages <= FOCUS_BAND[1])
         focus_err_sum += err[in_band].sum().item()
         focus_n += int(in_band.sum())
+        for name, low, high in VAL_BANDS:
+            mask = (ages >= low) & (ages <= high)
+            band_err[name][0] += err[mask].sum().item()
+            band_err[name][1] += int(mask.sum())
     focus_mae = focus_err_sum / focus_n if focus_n else float("nan")
-    return abs_err_sum / n, 100.0 * within5 / n, focus_mae
+    bands = {name: (total / count if count else float("nan"), count)
+             for name, (total, count) in band_err.items()}
+    return abs_err_sum / n, 100.0 * within5 / n, focus_mae, bands
 
 
 def train(args: argparse.Namespace) -> float:
@@ -335,7 +346,7 @@ def train(args: argparse.Namespace) -> float:
                     flush=True,
                 )
 
-        val_mae, val_cs5, val_focus_mae = evaluate(model, val_loader, device)
+        val_mae, val_cs5, val_focus_mae, val_bands = evaluate(model, val_loader, device)
         elapsed = time.time() - epoch_start
         # With --age-focus, "best" means best inside the band that matters.
         selection = val_focus_mae if args.age_focus else val_mae
@@ -347,12 +358,16 @@ def train(args: argparse.Namespace) -> float:
             f"| {elapsed:.1f}s{'  <-- best' if improved else ''}",
             flush=True,
         )
+        print("  val band MAE: " + " ".join(
+            f"{name}={mae:.3f}(n={count})" for name, (mae, count) in val_bands.items()
+        ), flush=True)
         history.append(
             {
                 "epoch": epoch,
                 "train_loss": running_loss / seen,
                 "val_mae": val_mae,
                 "val_focus_mae": val_focus_mae,
+                "val_band_mae": {name: mae for name, (mae, _) in val_bands.items()},
                 "val_cs5": val_cs5,
                 "lr": scheduler.get_last_lr()[0],
                 "seconds": elapsed,
