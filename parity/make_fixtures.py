@@ -87,9 +87,6 @@ def main() -> None:
     pair = np.hstack([src, cv2.flip(src, 1)])
     cases.append({"id": "two-faces", "image": write("two-faces.png", pair), "model": "real"})
 
-    # The same image through the other model, so the toggle is covered too.
-    cases.append({"id": "full-apparent", "image": "full.png", "model": "apparent"})
-
     # THE STRICT CASE.
     #
     # A fixed box whose square side is exactly the model input, so `resize_crop`

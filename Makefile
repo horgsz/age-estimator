@@ -72,6 +72,10 @@ registry: venv
 	$(VENV_PY) -m server.tools.export_static_registry \
 		--out web/public/models/models.json
 
+## Local retrain focused on ages 14-60; writes checkpoints/age_model_candidate.*
+retrain: venv
+	PY=$(abspath $(VENV_PY)) scripts/retrain.sh
+
 fixtures: venv
 	$(VENV_PY) parity/make_fixtures.py
 

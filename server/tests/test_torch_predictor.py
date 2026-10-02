@@ -607,23 +607,17 @@ def test_an_unmeasured_checkpoint_gets_no_caveat(tmp_path):
 def test_interval_calibration_is_corpus_scoped_not_per_model():
     """The counterpart to the test above, and the reason both exist.
 
-    Accuracy is per-checkpoint; interval coverage is not. Measured on the same
-    held-out split the two served models cover 61.7% and 60.8% -- a 0.9pp gap,
-    i.e. the ~7pp shortfall against the 68% nominal target belongs to the
-    quantile construction and this corpus, not to either set of weights.
-
-    It was once reported as a per-model regression by comparing 75% on UTKFace
-    against 60.8% on real ground truth. This asserts the scope so that nobody
-    re-nests it per model and re-creates that impression.
+    Accuracy is per-checkpoint; interval coverage is reported for the corpus
+    it was measured on. It was once reported as a per-model regression by
+    comparing 75% on UTKFace against 60.8% on real ground truth. This asserts
+    the scope so that nobody re-nests it per model and re-creates that
+    impression.
     """
     assert INTERVAL_CALIBRATION["scope"] == "corpus"
 
     measured = INTERVAL_CALIBRATION["measured"]
-    spread = abs(measured["real"] - measured["apparent"])
-    assert spread < 0.02, "models differ too little on coverage to key it per model"
-
-    shortfall = INTERVAL_CALIBRATION["nominal"] - max(measured.values())
-    assert shortfall > 0.05, "both models undercover; that is the documented finding"
+    assert set(measured) == {"real"}, "only the served model is measured"
+    assert abs(measured["real"] - INTERVAL_CALIBRATION["nominal"]) < 0.1
 
     # It must not have leaked into the per-digest accuracy table.
     for entry in MEASURED_ACCURACY_BY_DIGEST.values():

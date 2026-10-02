@@ -96,6 +96,15 @@ Best-val-MAE weights are written to `checkpoints/age_model.pt`.
 > that Python's `ssl` module rejects, so `timm`'s built-in downloader fails on
 > this machine; `curl` completes the chain from the system trust store.
 
+### Age focus and fine-tuning
+
+`--age-focus` draws training samples with probability
+`importance(age) / sqrt(count(age))` — importance is 1.0 for 14-60, 0.6 for
+61-79, 0.5 for 10-13, 0.35 for 80+ and 0.25 under 10 — and selects the best
+epoch on validation MAE inside 14-60. `--init-from PATH` fine-tunes an existing
+checkpoint instead of starting from ImageNet; `--sources` restricts the realgt
+corpus. `scripts/retrain.sh` wires these together.
+
 ## Evaluate
 
 ```bash

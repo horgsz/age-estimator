@@ -46,6 +46,7 @@ from realgt_data import (
 )
 
 REPORT_DIR = Path(__file__).resolve().parent / "reports"
+FOCUS_BAND = (14, 60)
 DECADES = [(0, 10, "0-9"), (10, 20, "10-19"), (20, 30, "20-29"), (30, 40, "30-39"),
            (40, 50, "40-49"), (50, 60, "50-59"), (60, 70, "60-69"),
            (70, 80, "70-79"), (80, 200, "80+")]
@@ -176,6 +177,15 @@ def main() -> None:
         best = min(decoded, key=lambda d: score(decoded[d], truth)["mae"])
         entry["best_decode"] = best
         entry["by_decade"] = {d: band_table(p, truth) for d, p in decoded.items()}
+
+        # The band the product is tuned for (train.py --age-focus).
+        in_focus = (truth >= FOCUS_BAND[0]) & (truth <= FOCUS_BAND[1])
+        entry["focus_band"] = {
+            "band": f"{FOCUS_BAND[0]}-{FOCUS_BAND[1]}", "n": int(in_focus.sum()),
+            **{d: score(p[in_focus], truth[in_focus]) for d, p in decoded.items()},
+        }
+        print(f"\n  ages {FOCUS_BAND[0]}-{FOCUS_BAND[1]} (n={int(in_focus.sum())}): " + ", ".join(
+            f"{d} MAE {entry['focus_band'][d]['mae']:.3f}" for d in decoded))
         print(f"\n  best decode on this split: {best}")
 
         print(f"\n  per-decade ({best} decode)")

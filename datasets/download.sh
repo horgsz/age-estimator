@@ -99,8 +99,30 @@ if [ -s "$PAIRS" ]; then
   ' _ < "$PAIRS"
 fi
 
+# --- IMDB-Clean --------------------------------------------------------------
+# ~286k faces of ~20k IMDb people with chronological ages, cleaned from
+# IMDB-WIKI by constrained clustering (github.com/yiminglin-ai/imdb-clean).
+# Only the 7 GB faces tarball is fetched, not the ~280 GB full images:
+# crop_faces.py re-detects with YuNet and re-crops at the serving margin, so
+# IMDB-WIKI's own 40%-margin framing never reaches training. imdb.mat inside the
+# tarball supplies person names, used to keep AgeDB's held-out people out of
+# training. Set SKIP_IMDB=1 to skip.
+if [ "${SKIP_IMDB:-0}" != 1 ]; then
+  echo "IMDB-Clean (7 GB faces + labels) ..."
+  IMDB="$RAW/imdb-clean"
+  mkdir -p "$IMDB/csvs"
+  LABELS="https://raw.githubusercontent.com/yiminglin-ai/imdb-clean/08b455ad7d24ed2906d4c94aad6018c5e0b37ce9/csvs"
+  for part in train valid test; do
+    fetch "$LABELS/imdb_${part}_new_1024.csv" "$IMDB/csvs/imdb_${part}_new_1024.csv"
+  done
+  fetch "https://data.vision.ee.ethz.ch/cvl/rrothe/imdb-wiki/static/imdb_crop.tar" \
+        "$DL/imdb_crop.tar"
+  [ -f "$IMDB/imdb_crop/imdb.mat" ] || tar -xf "$DL/imdb_crop.tar" -C "$IMDB"
+fi
+
 echo
 echo "Counts:"
 echo "  appa-real originals: $(find "$RAW/appa-real-release" -maxdepth 2 -name '*.jpg' ! -name '*_face.jpg' 2>/dev/null | wc -l | tr -d ' ')"
 echo "  fgnet images:        $(find "$RAW/fgnet/FGNET/images" -iname '*.jpg' 2>/dev/null | wc -l | tr -d ' ')"
 echo "  agedb images:        $(find "$RAW/agedb/images" -type f 2>/dev/null | wc -l | tr -d ' ')"
+echo "  imdb-clean faces:    $(find "$RAW/imdb-clean/imdb_crop" -name '*.jpg' 2>/dev/null | wc -l | tr -d ' ')"

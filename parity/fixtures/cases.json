@@ -31,11 +31,6 @@
       "model": "real"
     },
     {
-      "id": "full-apparent",
-      "image": "full.png",
-      "model": "apparent"
-    },
-    {
       "id": "strict-no-resize",
       "image": "full.png",
       "model": "real",

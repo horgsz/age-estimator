@@ -34,6 +34,17 @@ every table in `reports/distribution.txt` is broken out by it.
 | `fgnet` | 1,002 | 82 | 0–69 | dated personal photographs | yes |
 | **total** | **48,764** | **31,924** | 0–100 | 25,080 real (51.4%) | |
 
+A fifth source, **`imdb-clean`**, is added by `download.sh` (7 GB): ~286k faces
+of ~20k IMDb people from [IMDB-Clean](https://github.com/yiminglin-ai/imdb-clean)
+(Lin et al., FP-Age 2021). Ages are photo year minus IMDb birth date — real
+chronological ages, not human-estimated — and the face/identity assignments of
+the original IMDB-WIKI were cleaned by constrained clustering. It is split by
+IMDb person ID (4% val, 4% test), and anyone whose name matches an AgeDB identity
+inherits that identity's split, so AgeDB's held-out people never reach training
+through IMDB. Labels are MIT; the images are IMDB-WIKI's (research use only).
+Considered and not added: MORPH II (paid licence), CACD (no cleaning, noisy
+year-level labels), AFAD (tight low-res crops that don't match the serving crop).
+
 Counts are after dropping three rows labelled age 101, which is outside the
 model's 0–100 output bins.
 

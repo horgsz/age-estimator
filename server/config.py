@@ -31,18 +31,10 @@ REPO_ROOT = SERVER_DIR.parent
 
 DEFAULT_MODEL_PATH = str(REPO_ROOT / "checkpoints" / "age_model_realgt.pt")
 
-# Tried in order when AGE_MODEL_PATH is not set explicitly. The real-GT model is
-# preferred; the original UTKFace/DEX model is kept as a fallback so the app
-# still serves real weights if only the older artifact is present.
-#
-# These are DISTINCT MODELS, not versions of one -- different corpora, different
-# label semantics, and different accuracy. Whichever loads, /health reports the
-# figures measured on that specific artifact and nothing else (see
-# predictor.MEASURED_ACCURACY_BY_DIGEST).
-MODEL_PATH_CANDIDATES = (
-    DEFAULT_MODEL_PATH,
-    str(REPO_ROOT / "checkpoints" / "age_model.pt"),
-)
+# Tried in order when AGE_MODEL_PATH is not set explicitly. Only the real-age
+# model is served; /health reports the figures measured on that specific
+# artifact and nothing else (see predictor.MEASURED_ACCURACY_BY_DIGEST).
+MODEL_PATH_CANDIDATES = (DEFAULT_MODEL_PATH,)
 
 # Directory searched for the model catalog below. Both checkpoints normally live
 # side by side; point this at wherever the `ml/` side writes them.
@@ -76,32 +68,25 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         key="real",
         filename="age_model_realgt.pt",
         env_var="AGE_MODEL_PATH_REAL",
-        expected_digest="fb629f49987a",
+        expected_digest="78a8e04de16a",
         label="Real age",
         question="How old this person actually is",
         explanation=(
-            "Trained on 25,080 photos with real chronological ages (AgeDB, "
-            "APPA-REAL, FG-NET). Typical error about 6.4 years against a "
-            "person's actual age."
-        ),
-    ),
-    ModelSpec(
-        key="apparent",
-        filename="age_model.pt",
-        env_var="AGE_MODEL_PATH_APPARENT",
-        expected_digest="56894c480044",
-        label="Apparent age",
-        question="How old this person looks",
-        explanation=(
-            "Trained on UTKFace, whose labels are themselves algorithmic "
-            "estimates of apparent age. It reproduces how old a face reads to "
-            "people, which is not the same thing as how old they are."
+            "Trained on about 300,000 photos with real chronological ages "
+            "(AgeDB, APPA-REAL, FG-NET, IMDB-Clean), tuned for ages 14 to 60. "
+            "Typical error about 6.2 years against a person's actual age."
         ),
     ),
 )
 
 # Which model answers a request that does not ask for one.
 DEFAULT_MODEL_KEY = "real"
+
+
+# Digests of models that are no longer served. The UTKFace-trained
+# apparent-age model was retired in favour of a single real-age model; its
+# digest stays known so its weights are still refused under the "real" label.
+RETIRED_DIGESTS: dict[str, str] = {"56894c480044": "apparent"}
 
 
 def digest_owner(digest: str | None) -> str | None:
@@ -115,7 +100,7 @@ def digest_owner(digest: str | None) -> str | None:
     for spec in MODEL_CATALOG:
         if spec.expected_digest == digest:
             return spec.key
-    return None
+    return RETIRED_DIGESTS.get(digest)
 
 # The margin between the YuNet detection box and the square we feed the model.
 #
