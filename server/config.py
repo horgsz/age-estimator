@@ -74,6 +74,7 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         filename="age_model_realgt.pt",
         env_var="AGE_MODEL_PATH_REAL",
         expected_digest="fe69f4e55571",
+        server_only_digests=("95925c009b08",),
         label="Real age",
         question="How old this person actually is",
         explanation=(

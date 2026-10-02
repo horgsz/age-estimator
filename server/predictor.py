@@ -118,6 +118,26 @@ DEFAULT_DECODE = "median"
 # finds an offset, the dependency is already written down next to the numbers
 # it would invalidate, rather than being rediscovered.
 MEASURED_ACCURACY_BY_DIGEST = {
+    # Server-only CLIP ViT-B/16 (86M params, not in git): AgeDB + APPA-REAL +
+    # FG-NET + IMDB-Clean + CACD, --age-focus. Same split and decode as
+    # fe69f4e55571 (5.875). Ages 14-60: 5.41; teens 13-19: 6.35.
+    "95925c009b08": {
+        "real_age_mae": 5.4,
+        "real_age_corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3818",
+        "real_age_mae_14_60": 5.41,
+        "real_age_mae_with_imdb": 6.55,
+        "in_corpus_mae_utkface": None,
+        "accuracy_note": (
+            "real_age_mae is the error against real chronological age on the "
+            "clean-label held-out split, measured through the ml crop path."
+        ),
+        "user_facing": {
+            "typical_error_years": 5.4,
+            "typical_error_basis": "against a person's real age",
+            "gating_under18_shown_adult_pct": 22.6,
+            "caveat": None,
+        },
+    },
     # MobileNetV4-Medium trained from ImageNet on AgeDB + APPA-REAL + FG-NET +
     # IMDB-Clean with --age-focus (young ages sampled more than for
     # 78a8e04de16a). Same 3,818-image clean-label split and the same ml crop

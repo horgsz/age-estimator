@@ -112,6 +112,7 @@ loaded checkpoint's `sha256`. Two artifacts are in it:
 
 | sha256 | model | real-age MAE | in-corpus UTKFace MAE |
 | --- | --- | ---: | ---: |
+| `95925c009b08` | CLIP ViT-B/16 server-only, not in git (`make dev-server-model`) | **5.40** | `null` |
 | `fe69f4e55571` | MobileNetV4-Medium, real-GT + IMDB-Clean, 14-60 focus (served) | **5.88** | `null` — never saw UTKFace |
 | `78a8e04de16a` | real-GT + IMDB-Clean, 14-60 focus (previous) | 6.17 | `null` — never saw UTKFace |
 | `fb629f49987a` | real-GT (previous) | 6.34 | `null` — never saw UTKFace |
