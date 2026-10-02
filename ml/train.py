@@ -8,10 +8,11 @@ import math
 import time
 from pathlib import Path
 
+import pandas as pd
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from data import NUM_BINS, UTKFaceDataset, load_split
 from realgt_data import (
@@ -21,7 +22,7 @@ from realgt_data import (
     load_manifest,
     split_frame,
 )
-from model import AgeEstimator, save_checkpoint
+from model import AgeEstimator, load_checkpoint, save_checkpoint
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECKPOINT_PATH = REPO_ROOT / "checkpoints" / "age_model.pt"
@@ -38,9 +39,40 @@ def pick_device(requested: str) -> torch.device:
     return torch.device("cpu")
 
 
+# The ages the product cares about. Teenagers through mid-adulthood matter most,
+# the elderly less, young children least. --age-focus samples by this
+# importance and selects checkpoints on MAE inside FOCUS_BAND.
+FOCUS_BAND = (14, 60)
+
+
+def age_importance(age: int) -> float:
+    if age < 10:
+        return 0.25
+    if age < FOCUS_BAND[0]:
+        return 0.5
+    if age <= FOCUS_BAND[1]:
+        return 1.0
+    if age < 80:
+        return 0.6
+    return 0.35
+
+
+def focus_sample_weights(ages: pd.Series) -> torch.Tensor:
+    """Per-sample draw weights: importance / sqrt(frequency of that age).
+
+    The square root partially flattens the corpus's 20-50 peak so thin bands
+    inside the focus range (teenagers especially) are seen more often, without
+    the noise amplification of full inverse-frequency balancing.
+    """
+    counts = ages.map(ages.value_counts())
+    weights = ages.map(age_importance) / counts.pow(0.5)
+    return torch.as_tensor(weights.to_numpy(), dtype=torch.double)
+
+
 def build_loaders(
     batch_size: int, workers: int, limit: int | None, seed: int, zoom_out: float = 0.0,
-    corpus: str = "utkface", datasets_root=DEFAULT_DATASETS_ROOT,
+    corpus: str = "utkface", datasets_root=DEFAULT_DATASETS_ROOT, age_focus: bool = False,
+    sources: list[str] | None = None,
 ) -> tuple[DataLoader, DataLoader]:
     """Build train/val loaders for either corpus.
 
@@ -50,7 +82,7 @@ def build_loaders(
     intent.
     """
     if corpus == "realgt":
-        frame = load_manifest()
+        frame = load_manifest(sources=sources)
         # Re-checked here, not just at corpus-build time, because leakage shows
         # up as a better score rather than an error.
         assert_no_subject_leakage(frame)
@@ -72,10 +104,17 @@ def build_loaders(
             n=min(max(limit // 8, 64), len(val_df)), random_state=seed
         ).reset_index(drop=True)
 
+    sampler = None
+    if age_focus:
+        sampler = WeightedRandomSampler(
+            focus_sample_weights(train_df["age"]), num_samples=len(train_df),
+            replacement=True, generator=torch.Generator().manual_seed(seed),
+        )
     train_loader = DataLoader(
         make(train_df, True),
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=sampler is None,
+        sampler=sampler,
         num_workers=workers,
         drop_last=True,
         persistent_workers=workers > 0,
@@ -181,11 +220,14 @@ def mixup_batch(
 @torch.no_grad()
 def evaluate(
     model: AgeEstimator, loader: DataLoader, device: torch.device
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
+    """Return (MAE, CS@5, MAE inside FOCUS_BAND)."""
     model.eval()
     abs_err_sum = 0.0
     within5 = 0
     n = 0
+    focus_err_sum = 0.0
+    focus_n = 0
     for images, ages in loader:
         images = images.to(device, non_blocking=True)
         pred, _ = model.expectation(model(images))
@@ -194,7 +236,11 @@ def evaluate(
         abs_err_sum += err.sum().item()
         within5 += (err <= 5).sum().item()
         n += len(ages)
-    return abs_err_sum / n, 100.0 * within5 / n
+        in_band = (ages >= FOCUS_BAND[0]) & (ages <= FOCUS_BAND[1])
+        focus_err_sum += err[in_band].sum().item()
+        focus_n += int(in_band.sum())
+    focus_mae = focus_err_sum / focus_n if focus_n else float("nan")
+    return abs_err_sum / n, 100.0 * within5 / n, focus_mae
 
 
 def train(args: argparse.Namespace) -> float:
@@ -204,14 +250,20 @@ def train(args: argparse.Namespace) -> float:
 
     train_loader, val_loader = build_loaders(
         args.batch_size, args.workers, args.limit, args.seed, args.zoom_out,
-        corpus=args.corpus, datasets_root=args.datasets_root,
+        corpus=args.corpus, datasets_root=args.datasets_root, age_focus=args.age_focus,
+        sources=args.sources,
     )
     print(
         f"Train batches: {len(train_loader)} | Val batches: {len(val_loader)} "
         f"| batch_size={args.batch_size}"
     )
 
-    model = AgeEstimator(num_bins=NUM_BINS, pretrained=not args.no_pretrained).to(device)
+    if args.init_from:
+        model, _ = load_checkpoint(args.init_from)
+        model = model.to(device)
+        print(f"Fine-tuning from {args.init_from}")
+    else:
+        model = AgeEstimator(num_bins=NUM_BINS, pretrained=not args.no_pretrained).to(device)
     criterion = build_criterion(args).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
 
@@ -283,12 +335,15 @@ def train(args: argparse.Namespace) -> float:
                     flush=True,
                 )
 
-        val_mae, val_cs5 = evaluate(model, val_loader, device)
+        val_mae, val_cs5, val_focus_mae = evaluate(model, val_loader, device)
         elapsed = time.time() - epoch_start
-        improved = val_mae < best_mae
+        # With --age-focus, "best" means best inside the band that matters.
+        selection = val_focus_mae if args.age_focus else val_mae
+        improved = selection < best_mae
         print(
             f"epoch {epoch:>2}/{args.epochs} | loss {running_loss / seen:.4f} "
-            f"| val MAE {val_mae:.3f} | val CS@5 {val_cs5:.2f}% "
+            f"| val MAE {val_mae:.3f} | val MAE {FOCUS_BAND[0]}-{FOCUS_BAND[1]} "
+            f"{val_focus_mae:.3f} | val CS@5 {val_cs5:.2f}% "
             f"| {elapsed:.1f}s{'  <-- best' if improved else ''}",
             flush=True,
         )
@@ -297,6 +352,7 @@ def train(args: argparse.Namespace) -> float:
                 "epoch": epoch,
                 "train_loss": running_loss / seen,
                 "val_mae": val_mae,
+                "val_focus_mae": val_focus_mae,
                 "val_cs5": val_cs5,
                 "lr": scheduler.get_last_lr()[0],
                 "seconds": elapsed,
@@ -304,7 +360,7 @@ def train(args: argparse.Namespace) -> float:
         )
 
         if improved:
-            best_mae = val_mae
+            best_mae = selection
             # test_mae provisionally holds the best *val* MAE. That caveat used
             # to live only in this comment, where no consumer of the file could
             # see it -- a checkpoint straight from training advertised a test
@@ -316,7 +372,9 @@ def train(args: argparse.Namespace) -> float:
                 args.checkpoint,
                 decode="expectation",
                 extra={
-                    "val_mae": float(best_mae),
+                    "val_mae": float(val_mae),
+                    "val_focus_mae": float(val_focus_mae),
+                    "selection": "val_focus_mae" if args.age_focus else "val_mae",
                     "test_mae_source": (
                         "PROVISIONAL: this is the best validation MAE, not a "
                         "held-out test measurement. Run eval.py (utkface) or "
@@ -335,7 +393,8 @@ def train(args: argparse.Namespace) -> float:
     )
     history_path.parent.mkdir(parents=True, exist_ok=True)
     history_path.write_text(json.dumps(history, indent=2))
-    print(f"\nBest val MAE: {best_mae:.3f}\nHistory -> {history_path}")
+    label = f"val MAE {FOCUS_BAND[0]}-{FOCUS_BAND[1]}" if args.age_focus else "val MAE"
+    print(f"\nBest {label}: {best_mae:.3f}\nHistory -> {history_path}")
     return best_mae
 
 
@@ -380,6 +439,19 @@ def main() -> None:
              "dldl = distance-aware Gaussian soft target",
     )
     parser.add_argument("--dldl-sigma", type=float, default=2.5)
+    parser.add_argument(
+        "--age-focus", action="store_true",
+        help=f"sample by age importance (ages {FOCUS_BAND[0]}-{FOCUS_BAND[1]} first) and "
+             "select the checkpoint on MAE inside that band",
+    )
+    parser.add_argument(
+        "--sources", nargs="*", default=None,
+        help="realgt corpus: restrict to these sources (default: all real-GT sources)",
+    )
+    parser.add_argument(
+        "--init-from", type=Path, default=None,
+        help="fine-tune from this checkpoint instead of ImageNet weights",
+    )
     train(parser.parse_args())
 
 

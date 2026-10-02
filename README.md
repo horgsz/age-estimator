@@ -31,12 +31,19 @@ stops it recurring, and it requires the two paths' 224x224 input tensors to be
 
 * [`MODEL_LICENSING.md`](MODEL_LICENSING.md) — what the weights were trained on,
   what that permits, and what is still unverified.
-* **Neither model is usable for age verification.** About 30% of under-18s are
-  displayed as 18 or over by the real-age model, and about 40% by the
-  apparent-age model.
-* The two models answer *different questions* — how old someone **is** versus
-  how old they **look** — so their error figures are not a ranking. Every
-  derived figure in the UI is keyed to the checkpoint it was measured on.
+* **Not usable for age verification.** About 30% of under-18s are displayed as
+  18 or over.
+* One model is served: the real-age model, which estimates how old someone
+  **is**. The UTKFace apparent-age model was retired. Every derived figure in
+  the UI is keyed to the checkpoint it was measured on.
+
+## Retraining
+
+`make retrain` (or `scripts/retrain.sh`) runs download → manifest → crops →
+fine-tune → held-out comparison → ONNX export locally, adding IMDB-Clean
+(~286k faces, chronological ages) and weighting training toward ages 14-60.
+The result is `checkpoints/age_model_candidate.{pt,onnx}`; the served model is
+not touched.
 
 ## Layout
 
@@ -45,5 +52,5 @@ server/      FastAPI app: YuNet detection, the crop, the PyTorch predictor
 web/         the UI, and the browser inference path (src/browser/)
 parity/      the harness that compares the two paths, and its results
 ml/          training and offline evaluation (read-only from here)
-checkpoints/ the two served models, .pt and .onnx (read-only from here)
+checkpoints/ the served model (age_model_realgt), .pt and .onnx (read-only from here)
 ```

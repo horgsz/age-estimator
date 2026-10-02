@@ -96,7 +96,6 @@ jobs:
                    dist/parity.html \
                    dist/models/models.json \
                    dist/models/age_model_realgt.onnx \
-                   dist/models/age_model.onnx \
                    dist/models/face_detection_yunet_2023mar.dynamic.onnx \
                    dist/ort/ort-wasm-simd-threaded.wasm \
                    dist/ort/ort-wasm-simd-threaded.mjs; do

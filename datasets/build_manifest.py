@@ -11,6 +11,9 @@ Four sources, two label regimes:
                  reference but never used as a training target.
 ``fgnet``        Real ages from dated personal photographs.
 ``agedb``        Real ages manually transcribed from photograph metadata.
+``imdb-clean``   Real ages (photo year minus IMDb birth date) from IMDB-WIKI,
+                 with the noisy face/identity assignments cleaned by
+                 constrained clustering (Lin et al., FP-Age, 2021).
 
 Splitting
 ---------
@@ -24,7 +27,12 @@ FG-NET and AgeDB are longitudinal: the same person appears many times at
 different ages (~12 images each over 82 subjects for FG-NET, ~29 over 567 for
 AgeDB). A random per-image split would put the same face in train and test, and
 the model could score well by memorising individuals rather than by reading age.
-Both are therefore split with ``GroupShuffleSplit`` on the subject ID, and
+IMDB-Clean is longitudinal too (IMDb person ID), and it is split the same way.
+Its celebrities also overlap AgeDB's, so any IMDB person whose name matches an
+AgeDB identity inherits that identity's subject and split -- otherwise an AgeDB
+test face could be trained on through IMDB.
+
+All of these are therefore split with ``GroupShuffleSplit`` on the subject ID, and
 ``verify_no_subject_overlap`` asserts the result. This is the single most
 important correctness property in this file.
 """
@@ -32,6 +40,7 @@ important correctness property in this file.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 from pathlib import Path
 
@@ -71,7 +80,9 @@ AGEDB_NAME_RE = re.compile(r"^(?P<image_id>\d+)_(?P<identity>.+)_(?P<age>\d+)_(?
 
 def _rel(path: Path) -> str:
     """Repo-root-relative POSIX path, matching ml/splits/*.csv's convention."""
-    return path.resolve().relative_to(REPO_ROOT).as_posix()
+    # abspath, not resolve(): raw/ may be a symlink to a shared copy elsewhere,
+    # and the manifest must still describe it as a path under this repo.
+    return Path(os.path.abspath(path)).relative_to(REPO_ROOT).as_posix()
 
 
 # --------------------------------------------------------------------------
@@ -236,6 +247,106 @@ def load_agedb(root: Path, seed: int = SEED) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------
+# IMDB-Clean
+# --------------------------------------------------------------------------
+
+# IMDB-Clean is ~10x the rest of the corpus, so a 10% holdout would be wasted on
+# evaluation. 4% each is still ~11k faces per holdout.
+IMDB_HOLDOUT_FRACTION = 0.04
+IMDB_NAME_RE = re.compile(r"(?P<subject>nm\d+)_")
+
+
+def _norm_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _imdb_names(root: Path) -> dict[str, str]:
+    """Map IMDb person ID -> display name, from IMDB-WIKI's imdb.mat."""
+    candidates = [root / "imdb_crop" / "imdb.mat", root / "imdb" / "imdb.mat"]
+    mat_path = next((p for p in candidates if p.is_file()), None)
+    if mat_path is None:
+        return {}
+    from scipy.io import loadmat
+
+    meta = loadmat(mat_path)["imdb"][0, 0]
+    names: dict[str, str] = {}
+    for full_path, name in zip(meta["full_path"][0], meta["name"][0]):
+        match = IMDB_NAME_RE.search(str(full_path[0]))
+        if match and len(name):
+            names.setdefault(match.group("subject"), str(name[0]))
+    return names
+
+
+def load_imdb_clean(
+    root: Path, agedb: pd.DataFrame | None = None, seed: int = SEED
+) -> pd.DataFrame:
+    """Index IMDB-Clean, re-splitting by IMDb person ID.
+
+    The official CSVs are only used for the cleaned (filename, age) pairs; the
+    split is reassigned by identity so the no-overlap invariant holds by
+    construction rather than by trust.
+    """
+    csv_dir, image_dir = root / "csvs", root / "imdb_crop"
+    if not csv_dir.is_dir() or not image_dir.is_dir():
+        raise FileNotFoundError(f"{csv_dir} or {image_dir} not found; re-run datasets/download.sh")
+
+    labels = pd.concat(
+        [pd.read_csv(csv_dir / f"imdb_{part}_new_1024.csv", usecols=["filename", "age"])
+         for part in ("train", "valid", "test")],
+        ignore_index=True,
+    ).drop_duplicates("filename")
+
+    rows, missing = [], 0
+    for record in labels.itertuples(index=False):
+        image_path = image_dir / record.filename
+        match = IMDB_NAME_RE.search(record.filename)
+        if match is None or not image_path.is_file():
+            missing += 1
+            continue
+        rows.append(
+            {
+                "path": _rel(image_path),
+                "age": int(record.age),
+                "source": "imdb-clean",
+                "split": "",
+                "real_ground_truth": True,
+                "apparent_age": pd.NA,
+                "apparent_age_std": pd.NA,
+                "subject_id": f"imdb:{match.group('subject')}",
+            }
+        )
+    if missing:
+        print(f"  imdb-clean: {missing} labelled row(s) have no image on disk")
+
+    frame = assign_group_splits(
+        pd.DataFrame(rows), seed=seed,
+        test_fraction=IMDB_HOLDOUT_FRACTION, val_fraction=IMDB_HOLDOUT_FRACTION,
+    )
+
+    if agedb is not None and len(agedb):
+        names = _imdb_names(root)
+        if not names:
+            raise FileNotFoundError(
+                "imdb.mat not found, so IMDB identities cannot be checked against "
+                "AgeDB's; an AgeDB test face could leak into training."
+            )
+        agedb_subjects = agedb.drop_duplicates("subject_id").set_index(
+            agedb["subject_id"].drop_duplicates().str.removeprefix("agedb:").map(_norm_name)
+        )[["subject_id", "split"]]
+        person = frame["subject_id"].str.removeprefix("imdb:")
+        key = person.map(names).fillna("").map(_norm_name)
+        shared = key.isin(agedb_subjects.index) & (key != "")
+        frame.loc[shared, "subject_id"] = key[shared].map(agedb_subjects["subject_id"])
+        frame.loc[shared, "split"] = key[shared].map(agedb_subjects["split"])
+        print(
+            f"  imdb-clean: {shared.sum()} image(s) of "
+            f"{key[shared].nunique()} AgeDB identities follow AgeDB's split"
+        )
+
+    return frame[COLUMNS]
+
+
+# --------------------------------------------------------------------------
 # Grouped splitting
 # --------------------------------------------------------------------------
 
@@ -302,6 +413,7 @@ def main() -> None:
     parser.add_argument("--appa-real-root", type=Path, default=RAW_DIR / "appa-real-release")
     parser.add_argument("--fgnet-root", type=Path, default=RAW_DIR / "fgnet")
     parser.add_argument("--agedb-root", type=Path, default=RAW_DIR / "agedb")
+    parser.add_argument("--imdb-clean-root", type=Path, default=RAW_DIR / "imdb-clean")
     parser.add_argument("--out", type=Path, default=MANIFEST_PATH)
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument(
@@ -316,9 +428,14 @@ def main() -> None:
         "appa-real": lambda: load_appa_real(args.appa_real_root),
         "fgnet": lambda: load_fgnet(args.fgnet_root, seed=args.seed),
         "agedb": lambda: load_agedb(args.agedb_root, seed=args.seed),
+        "imdb-clean": lambda: load_imdb_clean(
+            args.imdb_clean_root,
+            agedb=next((f for f in frames if (f["source"] == "agedb").all()), None),
+            seed=args.seed,
+        ),
     }
 
-    frames = []
+    frames: list[pd.DataFrame] = []
     for name, loader in loaders.items():
         print(f"Loading {name} ...")
         try:
