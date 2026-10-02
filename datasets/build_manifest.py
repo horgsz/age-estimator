@@ -347,6 +347,67 @@ def load_imdb_clean(
 
 
 # --------------------------------------------------------------------------
+# CACD
+# --------------------------------------------------------------------------
+
+# 53_Robin_Williams_0001.jpg -> age 53, identity Robin_Williams.
+CACD_NAME_RE = re.compile(r"^(?P<age>\d+)_(?P<name>.+)_(?P<idx>\d{4})$")
+
+
+def held_out_names(frames: list[pd.DataFrame], imdb_root: Path) -> set[str]:
+    """Normalised names of every person in another source's val or test split."""
+    held = set()
+    imdb_names = None
+    for frame in frames:
+        out = frame[frame["split"].isin(["val", "test"])]["subject_id"].drop_duplicates()
+        for subject in out:
+            prefix, _, ident = subject.partition(":")
+            if prefix == "agedb":
+                held.add(_norm_name(ident))
+            elif prefix == "imdb":
+                imdb_names = imdb_names if imdb_names is not None else _imdb_names(imdb_root)
+                if ident in imdb_names:
+                    held.add(_norm_name(imdb_names[ident]))
+    return held
+
+
+def load_cacd(root: Path, held_out: set[str]) -> pd.DataFrame:
+    """Index CACD (163k celebrity photos, ages 14-62) as training data only.
+
+    Ages are photo year minus birth year, not human-verified. CACD is used for
+    training only, so its weaker labels never reach a reported number, and any
+    celebrity held out by another source is dropped by name -- CACD and
+    IMDB/AgeDB photograph many of the same people.
+    """
+    images = sorted(p for p in root.rglob("*.jpg") if not p.name.startswith("."))
+    if not images:
+        raise FileNotFoundError(f"no CACD images under {root}; re-run datasets/download.sh")
+    rows, dropped = [], 0
+    for image_path in images:
+        match = CACD_NAME_RE.match(image_path.stem)
+        if match is None:
+            continue
+        name = match.group("name")
+        if _norm_name(name) in held_out:
+            dropped += 1
+            continue
+        rows.append(
+            {
+                "path": _rel(image_path),
+                "age": int(match.group("age")),
+                "source": "cacd",
+                "split": "train",
+                "real_ground_truth": True,
+                "apparent_age": pd.NA,
+                "apparent_age_std": pd.NA,
+                "subject_id": f"cacd:{name}",
+            }
+        )
+    print(f"  cacd: dropped {dropped} image(s) of people held out by another source")
+    return pd.DataFrame(rows, columns=COLUMNS)
+
+
+# --------------------------------------------------------------------------
 # Grouped splitting
 # --------------------------------------------------------------------------
 
@@ -414,6 +475,7 @@ def main() -> None:
     parser.add_argument("--fgnet-root", type=Path, default=RAW_DIR / "fgnet")
     parser.add_argument("--agedb-root", type=Path, default=RAW_DIR / "agedb")
     parser.add_argument("--imdb-clean-root", type=Path, default=RAW_DIR / "imdb-clean")
+    parser.add_argument("--cacd-root", type=Path, default=RAW_DIR / "cacd")
     parser.add_argument("--out", type=Path, default=MANIFEST_PATH)
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument(
@@ -432,6 +494,10 @@ def main() -> None:
             args.imdb_clean_root,
             agedb=next((f for f in frames if (f["source"] == "agedb").all()), None),
             seed=args.seed,
+        ),
+        # Last, so every held-out identity is already known.
+        "cacd": lambda: load_cacd(
+            args.cacd_root, held_out_names(frames, args.imdb_clean_root)
         ),
     }
 

@@ -19,7 +19,12 @@ PRETRAINED_TAGS = {
     "efficientnet_b0": "ra_in1k",
     "convnext_femto": "d1_in1k",
     "mobilenetv4_conv_medium": "e500_r224_in1k",
+    # Server-only: too large for the browser build.
+    "vit_base_patch16_clip_224": "openai",
 }
+# Hub filename where it is not model.safetensors. timm's checkpoint filter
+# converts the OpenCLIP layout on load.
+PRETRAINED_FILES = {"vit_base_patch16_clip_224": "open_clip_model.safetensors"}
 NUM_BINS = 101
 INPUT_SIZE = 224
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -45,7 +50,8 @@ def ensure_pretrained_weights(
     mirror the weights locally once and load them with ``pretrained_cfg_overlay``.
     """
     tag = PRETRAINED_TAGS[backbone]
-    url = url or f"https://huggingface.co/timm/{backbone}.{tag}/resolve/main/model.safetensors"
+    filename = PRETRAINED_FILES.get(backbone, "model.safetensors")
+    url = url or f"https://huggingface.co/timm/{backbone}.{tag}/resolve/main/{filename}"
     dest = dest or PRETRAINED_DIR / f"{backbone}.{tag}.safetensors"
     if dest.exists() and dest.stat().st_size > 0:
         return dest
