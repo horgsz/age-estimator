@@ -137,8 +137,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          info=$(gh api "repos/${{ github.repository }}/pages" 2>/dev/null || echo '{}')
-          if [ "$info" = '{}' ]; then
+          # gh prints the 404 body to stdout before failing, so test the exit
+          # status rather than the output.
+          if ! info=$(gh api "repos/${{ github.repository }}/pages" 2>/dev/null); then
             echo "::error::GitHub Pages is not configured for this repository, and this workflow's token cannot enable it. Enable it once under Settings -> Pages (Source: GitHub Actions)."
             exit 1
           fi
