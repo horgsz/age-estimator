@@ -119,13 +119,14 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default=None)
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument("--manifest", type=Path, default=None)
     args = parser.parse_args()
 
     device = torch.device(
         args.device or ("mps" if torch.backends.mps.is_available() else "cpu")
     )
 
-    frame = load_manifest()
+    frame = load_manifest(args.manifest) if args.manifest else load_manifest()
     assert_no_subject_leakage(frame)
     test = split_frame(frame, args.split)
     print(f"\n{args.split} split: {len(test)} images, "

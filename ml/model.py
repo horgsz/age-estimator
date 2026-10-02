@@ -13,6 +13,18 @@ from torch import nn
 
 BACKBONE = "mobilenetv3_small_100"
 PRETRAINED_TAG = "lamb_in1k"
+# ImageNet weights per supported backbone (the timm Hugging Face tag).
+PRETRAINED_TAGS = {
+    "mobilenetv3_small_100": "lamb_in1k",
+    "efficientnet_b0": "ra_in1k",
+    "convnext_femto": "d1_in1k",
+    "mobilenetv4_conv_medium": "e500_r224_in1k",
+    # Server-only: too large for the browser build.
+    "vit_base_patch16_clip_224": "openai",
+}
+# Hub filename where it is not model.safetensors. timm's checkpoint filter
+# converts the OpenCLIP layout on load.
+PRETRAINED_FILES = {"vit_base_patch16_clip_224": "open_clip_model.safetensors"}
 NUM_BINS = 101
 INPUT_SIZE = 224
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -28,7 +40,7 @@ PRETRAINED_URL = (
 
 
 def ensure_pretrained_weights(
-    dest: Path | None = None, url: str = PRETRAINED_URL
+    dest: Path | None = None, url: str | None = None, backbone: str = BACKBONE
 ) -> Path:
     """Fetch the ImageNet backbone weights, returning the local file path.
 
@@ -37,7 +49,10 @@ def ensure_pretrained_weights(
     fails here. ``curl`` completes the chain from the system trust store, so we
     mirror the weights locally once and load them with ``pretrained_cfg_overlay``.
     """
-    dest = dest or PRETRAINED_DIR / f"{BACKBONE}.{PRETRAINED_TAG}.safetensors"
+    tag = PRETRAINED_TAGS[backbone]
+    filename = PRETRAINED_FILES.get(backbone, "model.safetensors")
+    url = url or f"https://huggingface.co/timm/{backbone}.{tag}/resolve/main/{filename}"
+    dest = dest or PRETRAINED_DIR / f"{backbone}.{tag}.safetensors"
     if dest.exists() and dest.stat().st_size > 0:
         return dest
     if shutil.which("curl") is None:
@@ -69,7 +84,7 @@ class AgeEstimator(nn.Module):
         self.backbone_name = backbone
         overlay = None
         if pretrained:
-            overlay = {"file": str(ensure_pretrained_weights())}
+            overlay = {"file": str(ensure_pretrained_weights(backbone=backbone))}
         self.backbone = timm.create_model(
             backbone,
             pretrained=pretrained,
@@ -118,6 +133,7 @@ def build_meta(
     test_mae: float,
     decode: str | None = None,
     extra: dict[str, object] | None = None,
+    backbone: str = BACKBONE,
 ) -> dict[str, object]:
     """Artifact-contract metadata block. Keep these keys and names stable.
 
@@ -128,7 +144,7 @@ def build_meta(
     original artifact, whose contract predates the key.
     """
     meta: dict[str, object] = {
-        "backbone": BACKBONE,
+        "backbone": backbone,
         "num_bins": NUM_BINS,
         "input_size": INPUT_SIZE,
         "mean": IMAGENET_MEAN,
@@ -167,7 +183,10 @@ def save_checkpoint(
     torch.save(
         {
             "state_dict": inner.state_dict(),
-            "meta": build_meta(test_mae, decode=decode, extra=extra),
+            "meta": build_meta(
+                test_mae, decode=decode, extra=extra,
+                backbone=getattr(model, "backbone_name", BACKBONE),
+            ),
         },
         path,
     )

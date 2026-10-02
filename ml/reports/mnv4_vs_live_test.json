@@ -1,0 +1,46 @@
+{
+  "live": {
+    "path": "../checkpoints/age_model_realgt.pt",
+    "backbone": "mobilenetv3_small_100",
+    "clean": {
+      "n": 3818,
+      "mae": 6.174,
+      "mae_14_60": 5.656,
+      "mae_13_19": 7.35,
+      "cs5_14_60": 59.4,
+      "under18_shown_adult_pct": 39.9,
+      "interval_coverage": 0.712
+    },
+    "all": {
+      "n": 15400,
+      "mae": 7.065,
+      "mae_14_60": 6.313,
+      "mae_13_19": 8.76,
+      "cs5_14_60": 57.1,
+      "under18_shown_adult_pct": 61.1,
+      "interval_coverage": 0.717
+    }
+  },
+  "new": {
+    "path": "../checkpoints/age_model_candidate.pt",
+    "backbone": "mobilenetv4_conv_medium",
+    "clean": {
+      "n": 3818,
+      "mae": 5.875,
+      "mae_14_60": 5.419,
+      "mae_13_19": 6.4,
+      "cs5_14_60": 61.4,
+      "under18_shown_adult_pct": 31.4,
+      "interval_coverage": 0.711
+    },
+    "all": {
+      "n": 15400,
+      "mae": 7.003,
+      "mae_14_60": 6.293,
+      "mae_13_19": 7.47,
+      "cs5_14_60": 57.8,
+      "under18_shown_adult_pct": 51.9,
+      "interval_coverage": 0.697
+    }
+  }
+}

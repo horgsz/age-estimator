@@ -205,7 +205,7 @@ def _load_entry(spec: config.ModelSpec, detector: FaceDetector) -> ModelEntry:
             ),
         )
 
-    verified = digest == spec.expected_digest
+    verified = digest == spec.expected_digest or digest in spec.server_only_digests
     if not verified:
         log.warning("=" * 72)
         log.warning(

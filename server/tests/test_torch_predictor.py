@@ -659,3 +659,20 @@ def test_health_reports_interval_calibration_at_top_level_for_real_weights(tmp_p
     assert payload["interval_calibration"]["scope"] == "corpus"
     # Never nested under the artifact it is not a property of.
     assert "interval_calibration" not in (payload.get("checkpoint") or {})
+
+
+def test_a_server_only_digest_is_verified_in_its_slot(tmp_path, monkeypatch):
+    """A large local-only model is served under the slot's real label."""
+    import dataclasses
+
+    from server import config
+    from server import registry as registry_mod
+
+    ckpt = _write_checkpoint(tmp_path, name="age_model_server.pt")
+    digest = TorchPredictor(str(ckpt)).describe_checkpoint()["sha256"]
+    spec = dataclasses.replace(config.MODEL_CATALOG[0], server_only_digests=(digest,))
+    monkeypatch.setenv(spec.env_var, str(ckpt))
+
+    entry = registry_mod._load_entry(spec, detector=None)
+    assert entry.available and entry.identity_verified
+    assert "unverified" not in entry.label

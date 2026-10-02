@@ -77,12 +77,12 @@ LOW_Q, HIGH_Q = 0.16, 0.84
 # measured on would be fitting the evaluation set.
 INTERVAL_CALIBRATION = {
     "nominal": 0.68,
-    "measured": {"real": 0.712},
+    "measured": {"real": 0.711},
     "corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3818",
     "scope": "corpus",
     "note": (
         "The low/high interval is nominally 68% (the 0.16/0.84 quantiles) and "
-        "covers about 71% on this corpus. The previous model covered 61% on "
+        "covers about 71% on this corpus. An earlier model covered 61% on "
         "the same split. Not retuned, because tuning it to the split it is "
         "measured on would be fitting the evaluation set."
     ),
@@ -118,6 +118,31 @@ DEFAULT_DECODE = "median"
 # finds an offset, the dependency is already written down next to the numbers
 # it would invalidate, rather than being rediscovered.
 MEASURED_ACCURACY_BY_DIGEST = {
+    # MobileNetV4-Medium trained from ImageNet on AgeDB + APPA-REAL + FG-NET +
+    # IMDB-Clean with --age-focus (young ages sampled more than for
+    # 78a8e04de16a). Same 3,818-image clean-label split and the same ml crop
+    # path and median decode as 78a8e04de16a (6.174 there).
+    "fe69f4e55571": {
+        "real_age_mae": 5.88,
+        "real_age_corpus": "AgeDB + APPA-REAL + FG-NET held-out test, n=3818",
+        # Ages 14-60: 5.42 (78a8e04de16a: 5.66). Teens 13-19: 6.40 (7.35).
+        "real_age_mae_14_60": 5.42,
+        # Including IMDB-Clean's noisier labels, n=15400: 7.00 (78a8e04de16a: 7.07).
+        "real_age_mae_with_imdb": 7.0,
+        "in_corpus_mae_utkface": None,
+        "accuracy_note": (
+            "real_age_mae is the error against real chronological age on the "
+            "clean-label held-out split, measured through the ml crop path "
+            "(the same YuNet crop at margin 0.0) rather than end to end "
+            "through this server. This model never saw UTKFace."
+        ),
+        "user_facing": {
+            "typical_error_years": 5.9,
+            "typical_error_basis": "against a person's real age",
+            "gating_under18_shown_adult_pct": 31.4,
+            "caveat": None,
+        },
+    },
     # The served model since the 14-60 retrain: fb629f49987a fine-tuned on
     # AgeDB + APPA-REAL + FG-NET + IMDB-Clean with --age-focus. Measured on the
     # same 3,818-image clean-label test split as fb629f49987a (whose ml-side

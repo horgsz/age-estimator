@@ -51,9 +51,9 @@ VAL_BANDS = [("<14", 0, 13), ("14-19", 14, 19), ("20-29", 20, 29), ("30-39", 30,
 
 def age_importance(age: int) -> float:
     if age < 10:
-        return 0.25
+        return 0.4
     if age < FOCUS_BAND[0]:
-        return 0.5
+        return 0.8
     if age <= FOCUS_BAND[1]:
         return 1.0
     if age < 80:
@@ -61,7 +61,12 @@ def age_importance(age: int) -> float:
     return 0.35
 
 
-def focus_sample_weights(ages: pd.Series) -> torch.Tensor:
+# Per-source draw multipliers. CACD is 112px aligned crops with photo-year
+# labels: useful identities, weaker images, so it is seen half as often.
+SOURCE_WEIGHTS = {"cacd": 0.5}
+
+
+def focus_sample_weights(ages: pd.Series, sources: pd.Series | None = None) -> torch.Tensor:
     """Per-sample draw weights: importance / sqrt(frequency of that age).
 
     The square root partially flattens the corpus's 20-50 peak so thin bands
@@ -70,13 +75,16 @@ def focus_sample_weights(ages: pd.Series) -> torch.Tensor:
     """
     counts = ages.map(ages.value_counts())
     weights = ages.map(age_importance) / counts.pow(0.5)
+    if sources is not None:
+        weights = weights * sources.map(SOURCE_WEIGHTS).fillna(1.0)
     return torch.as_tensor(weights.to_numpy(), dtype=torch.double)
 
 
 def build_loaders(
     batch_size: int, workers: int, limit: int | None, seed: int, zoom_out: float = 0.0,
     corpus: str = "utkface", datasets_root=DEFAULT_DATASETS_ROOT, age_focus: bool = False,
-    sources: list[str] | None = None,
+    sources: list[str] | None = None, manifest: Path | None = None,
+    samples_per_epoch: int | None = None,
 ) -> tuple[DataLoader, DataLoader]:
     """Build train/val loaders for either corpus.
 
@@ -86,7 +94,7 @@ def build_loaders(
     intent.
     """
     if corpus == "realgt":
-        frame = load_manifest(sources=sources)
+        frame = load_manifest(manifest, sources=sources) if manifest else load_manifest(sources=sources)
         # Re-checked here, not just at corpus-build time, because leakage shows
         # up as a better score rather than an error.
         assert_no_subject_leakage(frame)
@@ -111,7 +119,8 @@ def build_loaders(
     sampler = None
     if age_focus:
         sampler = WeightedRandomSampler(
-            focus_sample_weights(train_df["age"]), num_samples=len(train_df),
+            focus_sample_weights(train_df["age"], train_df.get("source")),
+            num_samples=samples_per_epoch or len(train_df),
             replacement=True, generator=torch.Generator().manual_seed(seed),
         )
     train_loader = DataLoader(
@@ -262,7 +271,8 @@ def train(args: argparse.Namespace) -> float:
     train_loader, val_loader = build_loaders(
         args.batch_size, args.workers, args.limit, args.seed, args.zoom_out,
         corpus=args.corpus, datasets_root=args.datasets_root, age_focus=args.age_focus,
-        sources=args.sources,
+        sources=args.sources, manifest=args.manifest,
+        samples_per_epoch=args.samples_per_epoch,
     )
     print(
         f"Train batches: {len(train_loader)} | Val batches: {len(val_loader)} "
@@ -274,7 +284,11 @@ def train(args: argparse.Namespace) -> float:
         model = model.to(device)
         print(f"Fine-tuning from {args.init_from}")
     else:
-        model = AgeEstimator(num_bins=NUM_BINS, pretrained=not args.no_pretrained).to(device)
+        model = AgeEstimator(
+            backbone=args.backbone, num_bins=NUM_BINS, pretrained=not args.no_pretrained,
+        ).to(device)
+    print(f"Backbone: {model.backbone_name} "
+          f"({sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params)")
     criterion = build_criterion(args).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
 
@@ -462,6 +476,14 @@ def main() -> None:
     parser.add_argument(
         "--sources", nargs="*", default=None,
         help="realgt corpus: restrict to these sources (default: all real-GT sources)",
+    )
+    parser.add_argument("--manifest", type=Path, default=None,
+                        help="realgt corpus manifest (default: datasets/manifest.csv)")
+    parser.add_argument("--samples-per-epoch", type=int, default=None,
+                        help="with --age-focus, draws per epoch (default: train size)")
+    parser.add_argument(
+        "--backbone", default="mobilenetv3_small_100",
+        help="timm backbone when not using --init-from (see model.PRETRAINED_TAGS)",
     )
     parser.add_argument(
         "--init-from", type=Path, default=None,

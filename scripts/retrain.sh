@@ -12,6 +12,7 @@
 #   EPOCHS=12             training epochs
 #   LR=1e-4               peak learning rate (3e-4 is the from-scratch default)
 #   INIT=checkpoints/age_model_realgt.pt   start weights; INIT=imagenet to retrain from scratch
+#   BACKBONE=mobilenetv3_small_100         timm backbone, only used with INIT=imagenet
 #   SKIP_DOWNLOAD=1       skip datasets/download.sh
 #   SKIP_IMDB=1           leave IMDB-Clean out (download and training)
 #   EXTRA_TRAIN_ARGS=...  passed through to ml/train.py
@@ -23,6 +24,7 @@ PY="${PY:-$ROOT/.venv/bin/python}"
 EPOCHS="${EPOCHS:-12}"
 LR="${LR:-1e-4}"
 INIT="${INIT:-checkpoints/age_model_realgt.pt}"
+BACKBONE="${BACKBONE:-mobilenetv3_small_100}"
 CANDIDATE="$ROOT/checkpoints/age_model_candidate.pt"
 
 step() { printf '\n=== %s ===\n' "$*"; }
@@ -44,7 +46,11 @@ SOURCES=(agedb appa-real fgnet)
 
 step "4/6 train (age-focus 14-60, DLDL)"
 INIT_ARGS=()
-[ "$INIT" = imagenet ] || INIT_ARGS=(--init-from "$ROOT/$INIT")
+if [ "$INIT" = imagenet ]; then
+  INIT_ARGS=(--backbone "$BACKBONE")
+else
+  INIT_ARGS=(--init-from "$ROOT/$INIT")
+fi
 (cd ml && "$PY" train.py \
   --corpus realgt --loss dldl --age-focus \
   --sources "${SOURCES[@]}" \
